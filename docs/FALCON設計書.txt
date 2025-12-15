@@ -1,0 +1,1355 @@
+
+FALCON 2 設計書（更新版：第0?3章）
+
+第0章　FALCON 2 の全体像
+
+FALCON 2 は、堅牢で整合性のあるデータベースを中心に構築される牛群管理ソフトウェアである。
+本システムは次の4層構造で設計する：
+
+1. データベース層（Core DB）
+2. ロジック層（FormulaEngine / RuleEngine）
+3. 入力UI層（イベント入力、検診入力、各種フォーム）
+4. 出力・分析層（レポート、対話型クエリ、データ分析）
+
+最優先事項は以下の3点である：
+- データベース構造の確立
+- イベント入力・修正の確立
+- イベントに応じた項目（アイテム）の正確な反映
+
+データ活用は以下の4つで行う：
+① 標準レポート（検診表など）
+② 任意データの対話型抽出（ChatGPT的操作）
+③ 標準データ分析
+④ 任意データの対話型分析（グラフ生成など）
+
+--------------------------------------------------------
+
+第1章　目的とコンセプト
+
+FALCON 2 の開発では、以下の基本理念を採用する：
+1. データベース構造の安定性
+2. イベント駆動型設計
+3. 項目追加に対する柔軟性
+4. 現場入力効率の最大化
+5. 将来拡張を妨げない構造
+
+--------------------------------------------------------
+
+第2章　データベース設計
+
+2.1 cow テーブル（コア項目のみ）
+auto_id（内部ID）
+cow_id（拡大4桁、重複あり）
+official_id（個体識別番号10桁）
+breed（品種）
+birthdate（生年月日）
+lact（産次）
+clvd（最終分娩日）
+rc（繁殖コード）
+
+※ 計算で得られる項目（受胎日、予定日、DIM 等）は保存しない。
+
+2.2 event テーブル
+全イベントを記録。内部ID（cow_auto_id）で cow と結びつく。
+
+2.3 item_value テーブル
+ユーザー定義項目の保存領域。
+
+2.4 マスターデータ
+event_types.json（イベント定義・input_code）
+item_dictionary.json（項目定義）
+
+--------------------------------------------------------
+
+
+
+第3章　イベント体系（CSV準拠）
+3.1　イベント一覧（event_number / input_code）
+【繁殖（Repro）】
+200 / 10 : AI（人工授精）（AI）
+201 / 11 : ET（胚移植）（ET）
+202 / 12 : 分娩（CALV）
+203 / 13 : 乾乳（DRY）
+204 / 14 : 繁殖停止（STOPR）
+205 / 15 : 売却（SOLD）
+206 / 16 : 死亡・廃用（DEAD）
+【検診（Check）】
+300 / 1 : フレッシュチェック（FCHK）
+301 / 2 : 繁殖検査（REPRO）
+302 / 4 : 妊娠鑑定マイナス（PDN）
+303 / 5 : 妊娠鑑定プラス（PDP）
+304 / 6 : 妊娠鑑定プラス（直近以外）（PDP2）
+305 / 7 : 流産（ABRT）
+306 / 8 : PAGマイナス（PAGN）
+307 / 9 : PAGプラス（PAGP）
+【健康（Health）】
+400 / 50 : 乳房炎（MAST）
+401 / 51 : 蹄病（HOOF）
+402 / 52 : 跛行（LAME）
+403 / 53 : 子宮炎（METR）
+404 / 54 : 胎盤停滞（RP）
+405 / 55 : ケトーシス（KETO）
+406 / 56 : 低Ca血症（乳熱）（MFV）
+407 / 57 : 第四胃変位（LDA/RDA）（DA）
+408 / 58 : 呼吸器疾患（RESP）
+409 / 59 : 消化器疾患（GI）
+410 / 60 : 下痢（DIAR）
+411 / 61 : 運動器疾患（MSK）
+412 / 62 : 事故・外傷（INJ）
+413 / 63 : その他健康トラブル（HOTH）
+【生産・スコア（Production）】
+100 / 80 : 乳検（TEST）
+101 / 81 : BCS（BCS）
+102 / 82 : 体重測定（WGT）
+103 / 83 : 衛生スコア（HYGS）
+104 / 84 : 飛節スコア（HKS）
+105 / 85 : ルーメンフィルスコア（RFS）
+106 / 86 : 肺エコースコア（LUS）
+110 / 87 : 搾乳停止（疾病・外傷）（STOPM）
+【移動（Move）】
+600 / 100 : 導入（IN）（IN）
+601 / 101 : 群変更（Group Move）（MOVE）
+602 / 102 : 隔離（Isolation）（ISO）
+603 / 103 : 放牧開始（PST）
+604 / 104 : 放牧終了（PSTE）
+【作業・タスク（Task）】
+600 / 100 : 削蹄（個体）（TRIM）
+601 / 101 : 削蹄（群）（TRIMA）
+602 / 102 : ワクチン（個体）（VACC）
+603 / 103 : ワクチン（群）（VACCA）
+604 / 104 : 駆虫（DEW）
+605 / 105 : 採材（SAMP）
+606 / 106 : 血液検査（LAB）
+607 / 107 : 糞便検査（FEC）
+608 / 108 : カーフ作業（CFEED）
+609 / 109 : 給餌量調整（FEED）
+610 / 110 : その他作業（TOTH）
+3.2　イベントカテゴリと役割
+本システムにおけるイベントは、CSV「FALCON2_All_Events_Numbered_withInputCode.csv」に定義された Category 列および FALCON2_category 列に基づき、繁殖・検診・健康・生産・移動・作業に分類される。
+
+
+第4章　イベント入力仕様（CSV準拠）
+4.1　入力番号（input_code）によるイベント選択
+各イベントには input_code（数値）が割り当てられており、入力画面で数字を入力することで対応するイベントが選択される。input_code と event_number、イベント名の対応は CSV「FALCON2_All_Events_Numbered_withInputCode.csv」の input_code 列および FALCON2_event_number 列を正とする。
+4.2　共通入力項目
+すべてのイベントは以下の共通入力項目を持つ。
+・cow_id（拡大4桁IDまたは個体識別番号から選択）
+・event_date（日付；簡略入力に対応）
+・note（自由記載メモ）
+4.3　イベント別入力項目（Input Pattern）
+イベント個別の入力項目は、CSV の「Input Pattern」列に定義する。たとえば、AI（人工授精）では 「ID → 日付 → sire → 技師 → 授精種類」、乳検では「ID → 日付 → kg」のように、入力順序と内容を文字列として保持し、GUI 実装時にはこの定義に基づき入力フォームを自動生成する。
+今後イベントを追加する場合も、CSV に新しい行を追加し、FALCON2_event_number / input_code / Event Name (JP) / Input Pattern を定義することで、設計書および実装と整合した拡張が可能となる。
+
+
+第5章　RuleEngine 仕様（CSV準拠）
+5.1　概要
+RuleEngine は、cow テーブルに保持された基礎情報（baseline）と、event テーブルに蓄積されたイベント履歴をもとに、個体の状態（LACT, RC, CLVD, last_ai_date, AICNT など）を再構築するコンポーネントである。
+5.2　基本方針
+・イベントが唯一の真実（Source of Truth）であり、派生項目は保存しない。
+・cow テーブルには、生年月日・導入日・品種・baseline LACT・baseline CLVD・baseline RC・群（PEN）などの基礎情報のみを保持する。
+・イベント追加・修正・削除後は、該当個体のイベント履歴を日付昇順で走査し直し、状態をフル再計算する。
+5.3　代表的なイベント処理
+分娩イベント（Event Name (JP) に「分娩」を含むレコード）では、産次（LACT）を 1 加算し、最終分娩日（CLVD）を更新し、繁殖ステータス（RC）を Fresh 相当に設定する。
+AI/ET イベント（たとえば Alias が AI などの授精イベント）では、last_ai_date を更新し、AICNT を加算し、RC を Bred 相当に設定する。
+妊娠判定イベント（Preg+/PAG+ 等）では、直近の AI/ET 日付から受胎日（CONC）を計算し、RC を Pregnant 相当に設定する。
+乾乳イベントでは、RC を Dry 相当に変更する。
+5.4　削除時の再計算
+イベント削除時には、当該個体について以下の手順で状態を再構築する。
+1. cow テーブル上の動的状態（LACT, RC, CLVD, last_ai_date, AICNT 等）を baseline にリセットする。
+2. 当該牛のイベント履歴を event_date 昇順で取得する。
+3. 各イベントについて 5.3 のルールに従って順次適用し、最終状態を得る。
+4. DIM, DUED, DPAI, CCI などの計算項目は FormulaEngine が参照時に計算する。
+5.5　設計上の注意点
+・RuleEngine はイベントの内容そのものではなく、CSV に定義された Category や Internal Code, Alias を手掛かりに処理を分岐させる。
+・具体的な event_number / input_code は常に CSV を正とし、コード側にハードコーディングしない実装とすることで、イベント辞書の拡張・修正に柔軟に追従できる。
+
+
+第7章　ItemDictionary（項目辞書）
+7.0　概要
+ItemDictionary（項目辞書）は、FALCON2 において個体カード・一覧表示・レポート・検索クエリに使用される すべての項目（Item）の定義を統一的に管理する仕組みである。本辞書は cow テーブルの実カラム構造とは独立し、UI や FormulaEngine・RuleEngine と連携する論理辞書として機能する。項目は Core / Calc / Event-derived / Custom の4種類に分類される。
+
+7.1　ItemDictionary の役割
+・全項目の正準的定義（項目名・キー・カテゴリ・データ型）を提供する
+・cow テーブルと item_value テーブルの橋渡しとなる
+・FormulaEngine・RuleEngine が参照する基準となる
+・ユーザーによる項目追加を可能にする柔軟性を提供する
+
+7.2　項目分類（Core / Calc / Event-derived / Custom）
+
+7.2.1 Core Items（DB保存される項目）
+Core 項目は、変動が少なくイベント処理に依存しない牛の基礎属性である。cow テーブルの物理カラムとして保持される。
+ID（拡大4桁ID）, JPN10（個体識別番号10桁）, BRD（品種）, BTHD（生年月日）, ENTR（導入日）, LACT（産次基準値）, RC（繁殖ステータス基準値）, CLVD（最終分娩日基準値）, PEN（群区分）, FRM（農場コード）
+
+7.2.2 Calc Items（計算項目：保存しない）
+FormulaEngine が参照時に動的計算する値であり、DIM, DUED, CONC, DPAI, AICNT などがこれに含まれる。cow テーブルには保存されず、破綻の原因を排除する設計上の重要概念である。
+
+7.2.3 Event-derived Items（イベント由来項目：保存しない）
+乳検・疾病・スコアなど、イベント履歴から導かれる最新値または集計値である。最新乳検乳量（MILK）、乳房炎回数（MASTC）、飛節スコア（HKS）、ルーメンフィルスコア（RFS）などが該当する。
+
+7.2.4 Custom Items（ユーザー追加項目）
+ユーザーが自由に定義する項目。保存先は item_value テーブルとなる。NOTE や CF（カスタムフィールド）などが該当。
+
+7.3　ItemDictionary の構造
+ItemDictionary は CSV または JSON 形式で管理され、以下のフィールドを持つ：
+key（システム内部名）, label（日本語名）, category（分類）, datatype（型）, origin（core/calc/event/custom）, editable（編集可否）, description（説明）。
+
+7.4　ItemDictionary 運用ルール
+1. Core 項目を勝手に増やさない（cow テーブルの破綻を防ぐ）
+2. Calc 項目は FormulaEngine で定義し保存しない
+3. Event-derived は event_history 参照で算出する
+4. Custom 項目は item_value に保存する
+5. 新規項目追加時は ItemDictionary に行追加することで UI 自動生成との整合を保つ
+
+7.5　ItemDictionary の拡張性
+新しいスコア項目や乳検項目なども簡単に追加可能であり、FALCON2 の高い柔軟性を支える基盤となっている。
+
+7.6　まとめ
+ItemDictionary は、FALCON2 の“論理的な牛個体情報のすべて”を定義する基準であり、cow テーブル・event テーブル・UI ロジックの整合性を保証する。
+
+
+第8章　農場環境アーキテクチャ（Farm Environment Architecture）
+8.0　概要
+FALCON2 は農場単位（Farm-level）でデータ・設定を完全に独立管理するデスクトップアプリケーションであり、辞書・設定・プロトコール類は FARM フォルダ内に保存される。これにより担当者交代や PC 移行時でも、農場フォルダのコピーのみで環境移行が完了する。
+
+8.1　フォルダ構造
+C:\FALCON\     （アプリ本体：変更不可）
+ ├─ app\
+ ├─ modules\
+ ├─ ui\
+ └─ config_default\（テンプレート設定）
+
+C:\FARMS\       （農場データ：農場ごとに独立）
+ ├─ FarmA\
+ │    ├─ farm.db
+ │    ├─ event_dictionary.json
+ │    ├─ item_dictionary.json
+ │    ├─ settings.json
+ │    ├─ custom_events.json
+ │    ├─ custom_items.json
+ │    ├─ ai_technicians.json
+ │    ├─ ai_types.json
+ │    ├─ vet_codes.json
+ │    ├─ protocols.json
+ │    ├─ pens.json
+ │    └─ repro_settings.json
+
+
+8.2　農場ごとに保持される辞書・設定ファイル
+農場ごとに独立して保持されるファイル：
+event_dictionary.json（イベント辞書）
+item_dictionary.json（アイテム辞書）
+settings.json（画面設定）
+custom_events.json（ユーザー追加イベント）
+custom_items.json（ユーザー追加項目）
+ai_technicians.json（授精師コード）
+ai_types.json（授精種類コード）
+vet_codes.json（獣医師コード）
+protocols.json（治療プロトコール）
+pens.json（群設定）
+repro_settings.json（繁殖設定）
+
+8.3　新規農場作成フロー（Farm Template / Clone方式）
+1. 農場名を入力し、C:\FARMS\FarmX を作成する。
+2. “基にする農場” を選択（既存農場またはテンプレート農場）。
+3. 選択した農場の辞書・設定ファイルを FarmX にコピーする。
+4. 新規 farm.db を初期化し、cow / event / item_value テーブルを空で作成する。
+
+8.4　農場引き継ぎ（担当者交代時）
+FarmA フォルダを丸ごとコピーし、新担当PCの C:\FARMS に貼り付けるだけで環境再現が可能。
+
+8.5　設計思想（データとアプリケーションの分離）
+アプリ本体（C:\FALCON）は不変。農場設定は完全に FARM フォルダ側で保持する。これにより、
+・アプリ更新時に農場データが壊れない
+・複数農場の同時管理が容易
+・PC 移行が簡単、安全
+・農場テンプレートの作成が容易
+といった利点が得られる。
+
+8.6　まとめ
+農場フォルダ単位で辞書・設定・DB を持つ構造は、FALCON2 の堅牢性と柔軟性を支える根幹アーキテクチャである。
+
+
+第9章　データベース設計（ER図 + テーブル定義）
+9.0　概要
+FALCON2 のデータベース（SQLite）はイベント中心（Event-driven）アーキテクチャで設計される。cow テーブルには最小限の基礎情報（baseline）のみを保持し、動的情報は event テーブルおよび ItemDictionary に基づき構築される。計算項目は保存せず FormulaEngine によって算出され、柔軟性と堅牢性を両立する。
+
+9.1　ER図（Entity Relationship Diagram）
+以下に FALCON2 の中核 ER 図を示す：
+┌──────────┐        1      ┌──────────────┐       N      ┌──────────────┐
+│   cow      │────────────→│    event       │────────────→│  item_value    │
+└──────────┘               └──────────────┘               └──────────────┘
+      │ 1                                         ▲ 0..N
+      │                                           │
+      │                                           │ item_key により ItemDictionary を参照
+      ▼
+┌──────────────────┐
+│ ItemDictionary(*) │  ← JSONとして保存（DBには保持しない）
+└──────────────────┘
+
+9.2　テーブル一覧
+cow（基礎属性） / event（イベント履歴） / item_value（Custom項目） / farm_settings（最小限の農場設定） / version（DBバージョン）
+
+9.3　cow テーブル構造（baseline only）
+cow テーブルには基礎属性のみを保持し、計算項目やイベント依存項目は保存しない。以下は構造定義である：
+・auto_id：INTEGER PRIMARY KEY
+・ID：TEXT（拡大4桁）
+・JPN10：TEXT UNIQUE（個体識別番号）
+・BRD：TEXT（品種）
+・BTHD：TEXT（生年月日）
+・ENTR：TEXT（導入日）
+・LACT：INTEGER（baseline産次）
+・RC：INTEGER（baseline繁殖ステータス）
+・CLVD：TEXT（baseline最終分娩日）
+・PEN：TEXT（群）
+・FRM：TEXT（農場コード）
+
+9.4　event テーブル構造（FALCON2 の核）
+event テーブルは FALCON2 の中心であり、全ての動的変化はここに蓄積される。構造は以下の通り：
+・event_id：INTEGER PRIMARY KEY
+・cow_auto_id：INTEGER（cow の auto_id）
+・event_number：INTEGER（FALCON2_event_number）
+・input_code：INTEGER（入力番号）
+・event_date：TEXT（日付）
+・note：TEXT（メモ）
+・json_data：TEXT（柔軟な構造：SIRE、技師コード、スコア、乳検値など）
+例：AIイベントの json_data：
+{ "sire": "FZ12345", "technician": "T01", "type": "A02", "is_sexed": true }
+例：HockScore：
+{ "hock_score": 2 }
+
+9.5　item_value テーブル（Custom Items 用）
+ユーザー追加項目は item_value テーブルで柔軟に管理する：
+・id：INTEGER PRIMARY KEY
+・cow_auto_id：INTEGER
+・item_key：TEXT（ItemDictionary.key）
+・item_value：TEXT（辞書に基づく型）
+
+9.6　farm_settings テーブル
+DB内に保持する最小限の設定：
+・farm_name（農場名）
+・created_at（作成日）
+・db_version（バージョン）
+主要設定（辞書類）は JSON で農場フォルダに保存される。
+
+9.7　キー制約とインデックス
+高速化のため推奨されるインデックス：
+CREATE INDEX idx_event_cow ON event(cow_auto_id);
+CREATE INDEX idx_event_date ON event(event_date);
+CREATE INDEX idx_event_number ON event(event_number);
+CREATE INDEX idx_item_value_cow ON item_value(cow_auto_id);
+
+9.8　イベント依存項目の非保存ポリシー
+以下の項目は event 履歴から再構築されるため保存しない：DIM / DUED / CONC / DPAI / AICNT / last_ai_date / BCS / HKS / RFS / 乳検値など。保存しないことで、イベント編集・削除時の不整合を根本的に回避する。
+
+9.9　DB設計の強み（FALCON1 の問題を完全解決）
+・壊れない：計算値非保存により整合性が崩れない
+・軽い：SQLite + インメモリ計算
+・拡張性：json_data により新しいイベント・項目追加が容易
+・農場ごとに独立：FarmA と FarmB が干渉しない
+
+
+第10章　FormulaEngine 計算式一覧
+10.0　概要
+FormulaEngine は cow テーブルおよび event テーブルを入力とし、保存されない計算項目（Calc Items）を動的に算出するエンジンである。計算値はDBに保存されず、呼び出し時に毎回算出されるため、イベント削除・修正による不整合を防ぎ、常に正しい最新値を提供する。
+
+10.1　計算項目一覧（Calc Items）
+FormulaEngine が提供する主な項目：
+・AGE（年齢）
+・DIM（搾乳日数）
+・DCC（受胎後日数）
+・DPAI（授精後日数）
+・AICNT（授精回数）
+・CCI（分娩間隔）
+・PCCI（予定分娩間隔）
+・CONC（受胎日）
+・DUED（分娩予定日）
+・LSIR（最終授精SIRE）
+・PMILK / PMDIM（ピーク乳量関係）
+・HKS（飛節スコア） / RFS（ルーメンフィル）
+
+10.2　日付計算の基本ルール
+days_between(date1, date2) = (date2 - date1).days
+add_days(date, n) = date + n日
+today() = 現在日付
+
+10.3　計算式詳細（公式集）
+10.3.1　AGE（年齢）
+AGE = days_between(BTHD, today()) // 365
+10.3.2　DIM（搾乳日数）
+DIM = days_between(CLVD, today())
+10.3.3　AICNT（当産次の授精回数）
+AICNT = count(events where event_number ∈ [AI, AI2, ET] and event_date > CLVD_of_this_lact)
+10.3.4　last_ai_date（最新授精日）
+last_ai_date = max(event_date for AI/ET events in same lact)
+10.3.5　DPAI（授精後日数）
+DPAI = days_between(last_ai_date, today())
+10.3.6　CONC（受胎日）
+latest_preg_event = latest of (Preg+, PAG+)
+latest_ai_event = latest of (AI, AI2, ET)
+
+if latest_preg_event exists:
+    if latest_ai_event is ET:
+        CONC = latest_ai_event.date - 7日
+    else:
+        CONC = latest_ai_event.date
+else:
+    CONC = null
+10.3.7　DCC（受胎後日数）
+DCC = days_between(CONC, today())
+10.3.8　DUED（分娩予定日）
+DUED = add_days(CONC, 280)
+10.3.9　CCI（分娩間隔）
+CCI = days_between(previous_calving_date, last_calving_date)
+(分娩イベントが2回以上存在する場合のみ計算)
+10.3.10　PCCI（予定分娩間隔）
+PCCI = days_between(CLVD, DUED)
+10.3.11　LSIR（最終授精SIRE）
+LSIR = latest(AI/ET event).json_data['sire']
+10.3.12　乳検関連
+MILK = 最新 milk_event.json_data['milk_kg']
+PMILK = 最大の milk_event.json_data['milk_kg']
+PMDIM = DIM_at(PMILK_event_date)
+10.3.13　スコア類
+HKS = latest(HockScore).json_data['hock_score']
+RFS = latest(RumenFill).json_data['rumen_fill']
+
+10.4　FormulaEngine の再計算トリガー
+イベントの追加・編集・削除のたびに、RuleEngine が cow の状態を再構築し、FormulaEngine は必要時に計算値を算出する。計算値は保存されない。
+
+10.5　FormulaEngine の設計哲学
+・イベント履歴が唯一の真実（Source of Truth）
+・計算値はその場で導出（Dynamic Calculation）
+・cowテーブルを肥大化させない
+・破綻しないデータ構造
+・DC305 と同等の堅牢性を持つ
+
+10.6　まとめ
+FormulaEngine は FALCON2 の「壊れない個体情報管理」を実現するための中核ロジックであり、RuleEngine と連携しながら正確な値を提供する。
+
+
+第11章　UI設計（画面仕様）
+11.0　概要
+FALCON2 のUIは「シンプル・高速・AI連携」を中心に設計する。メイン領域には ChatGPT による対話、検索結果、分析、個体カードを統合表示し、左に5カテゴリのサイドメニュー、上部にコマンドラインを配置する3領域構成とする。
+
+11.1　UI全体構造（3領域レイアウト）
+FALCON2 の画面は以下の 3 領域から構成される：
+1. 上部：コマンドライン（自然言語と短縮コマンドの統一窓）
+2. 左：サイドメニュー（5大カテゴリ）
+3. 中央：メイン領域（AIパネル・リスト・個体カード・グラフ表示）
+
+11.2　上部：コマンドライン（自然言語 × コマンドラインの統合）
+FALCON2 の操作の中心となる入力窓。自然言語と DC305 のような短縮コマンドを同時に扱える：
+> 1234          → 個体カード表示
+> open >200     → DIM200超のOpen牛
+> 今月の妊娠率を教えて
+> ai 2345       → AI入力画面を即時表示
+
+自然言語とショートコマンドを統合することで、最速かつ最も柔軟なインターフェースとなる。
+
+11.3　サイドメニュー（5大カテゴリ構造）
+サイドメニューは農場業務フローとデータ処理の流れに基づき、以下の5カテゴリで構成する：
+?? データ入力
+　├─ 繁殖検診入力
+　├─ イベント入力
+　├─ 乳検データ取り込み
+　└─ ゲノムデータ取り込み
+
+?? レポート出力
+　├─ 繁殖レポート
+　├─ 乳検レポート
+　├─ ゲノムレポート
+　└─ 疾病レポート
+
+?? 分析
+　├─ 繁殖分析グラフ
+　├─ 乳検分析グラフ
+　├─ ゲノム分析
+　└─ 疾病分析
+
+? 辞書・設定
+　├─ イベント辞書
+　├─ アイテム辞書
+　└─ 農場設定
+
+?? 農場管理
+　├─ 農場切替
+　├─ 新規農場作成
+　└─ バックアップ（将来）
+
+11.4　中央：メイン領域（AIパネル & 情報表示ビュー）
+中央領域は FALCON2 の“ステージ”であり、以下を統合的に表示する：
+・ChatGPT との対話（自然言語クエリ）
+・牛群リスト
+・個体カード
+・レポートプレビュー
+・統計グラフ
+
+必要な画面をその都度読み込み、複数ウィンドウを開かずに業務を完結させる。
+
+11.5　CowCard（個体カード）
+CowCard は独立ウィンドウではなくメイン領域に表示される。これにより操作が高速化され、AI が個体の説明・分析を行う際にも自然に連動できる。
+
+構成（推奨）：
+・左：基礎情報（AGE, DIM, RC, CONC, DUED など）
+・右：イベント履歴（タブ：全件／繁殖／乳検／疾病）
+
+11.6　ステータスバー（農場の進捗表示）
+画面上部には農場の入力状況を示すステータスバーを配置する：
+・農場名
+・最終分娩入力日
+・最終AI入力日
+・乳検取り込み日
+・繁殖検診実施日
+
+遅れのある項目は色で警告し、入力漏れを防ぐ。
+
+11.7　設計思想まとめ
+・一画面完結のシンプルな構成
+・AI と人間の操作を1本のコマンドラインで統合
+・サイドメニューは5カテゴリに絞り、迷わないUIを実現
+・個体カードと分析画面を中央ステージに統合し、用途に応じて瞬時に切り替え
+・DC305 の高速性と現代的UXを両立する次世代型UIを実現する
+
+
+第12章　辞書システム設計（event_dictionary.json / item_dictionary.json）
+12.0　概要
+FALCON2 は “辞書駆動型アプリケーション” として設計されており、イベントの入力仕様や表示項目の構成は全て JSON 辞書により定義される。これにより、農場ごとの柔軟なカスタマイズ、UI の自動生成、FormulaEngine・RuleEngine との統合が容易になる。
+
+12.1　event_dictionary.json の役割
+event_dictionary.json は農場で使用される全イベントの定義情報を保持する。各イベントには、以下の情報が含まれる：
+・event_number（イベント番号）
+・alias（短縮コード）
+・name_jp（日本語名）
+・category（イベント大分類）
+・input_code（数字入力ショートカット）
+・input_fields（入力項目の定義）
+
+この辞書を基に EventInputWindow の UI が動的生成され、RuleEngine による項目更新ロジックの基礎データとなる。
+
+12.2　event_dictionary.json の構造（スキーマ）
+以下は event_dictionary.json の JSON スキーマ例である：
+
+{
+  "101": {
+    "event_number": 101,
+    "alias": "BCS",
+    "name_jp": "BCS",
+    "category": "Production",
+    "input_code": "81",
+    "input_fields": [
+      {"key": "bcs", "label": "BCS値", "type": "int"}
+    ]
+  }
+}
+
+全イベントが event_number をキーとして格納され、参照が高速化される。
+
+12.3　Input Pattern の自動解析ルール
+CSV に記される Input Pattern を解析し、入力項目を自動生成する。代表的な変換ルールは以下である：
+・kg → float
+・BCS／BCS値 → int
+・スコア値 → int
+・SIRE → str
+・技師 → str
+・種類 → str（ai_type）
+・飛節／HKS → int
+・RFS／ルーメン → int
+
+これにより、人手でイベントUIを定義する作業が不要となり、農場独自イベントの追加も容易になる。
+
+12.4　item_dictionary.json の役割
+item_dictionary.json は CowCard やレポートで使用する項目の一覧と属性を定義する。
+項目は以下の4分類に分かれる：
+1. Core Items（ID, JPN10, BRD, BTHD など）
+2. Calc Items（DIM, DPAI, CONC, DUED, LSIR など）
+3. Event-derived Items（最新乳量、最新BCS など）
+4. Custom Items（農場独自の管理項目）
+
+これにより CowCard の柔軟な編集が可能となり、イベント入力と項目表示が完全同期される。
+
+12.5　item_dictionary.json の構造（スキーマ）
+スキーマ例：
+
+{
+  "DIM": {
+    "label": "搾乳日数",
+    "origin": "calc",
+    "datatype": "int",
+    "editable": false
+  }
+}
+
+“origin” により、項目が計算値か、イベント由来か、ユーザー編集可能かを識別する。
+
+12.6　辞書ファイルの配置と農場ごとの独立性
+辞書ファイルは各農場フォルダに格納され、農場ごとにイベントや項目の定義を自由に変更できる。
+構造例：
+C:\FARMS\FarmA\event_dictionary.json
+C:\FARMS\FarmA\item_dictionary.json
+
+新規農場作成時には、基となる農場から辞書ファイルをコピーする。
+
+12.7　辞書更新とアプリ側の反映
+辞書ファイルが更新されると、以下が自動で反映される：
+・EventInputWindow UI の更新
+・CowCard の項目表示更新
+・RuleEngine の動作条件更新
+
+これにより、コード変更なしで機能追加が可能な“辞書駆動型”構造が完成する。
+
+12.8　まとめ
+event_dictionary と item_dictionary は FALCON2 の中核となる設定ファイルであり、UI生成、イベント入力、計算式、レポート、AI対話すべてに影響する。辞書を正しく設計することで、FALCON2 は高い柔軟性と拡張性を獲得する。
+12.9　item_dictionary.json の具体例（初期テンプレート）
+以下は FALCON2 における item_dictionary.json の正式な初期テンプレート例であり、CowCard 表示、レポート出力、検索条件構築など、アプリ全体の UI・データ取得に利用される。
+代表例：
+
+{
+  "DIM": {
+    "label": "搾乳日数",
+    "origin": "calc",
+    "datatype": "int",
+    "editable": false
+  },
+  "LAST_BCS": {
+    "label": "最新BCS",
+    "origin": "event",
+    "datatype": "int",
+    "editable": false
+  },
+  "NOTE": {
+    "label": "個体メモ",
+    "origin": "custom",
+    "datatype": "str",
+    "editable": true
+  }
+}
+
+・core：cowテーブルに保存される基礎項目
+・calc：FormulaEngine により算出される計算項目（保存しない）
+・event：イベント由来の最新値（保存しない）
+・custom：item_value テーブルに保存する農場独自項目（編集可能）
+
+この辞書を編集することで、CowCard の表示項目、並び順、編集可否が農場ごとに柔軟にカスタマイズ可能となる。
+
+
+第13章　UIワイヤーフレーム（画面構造図）
+13.0　概要
+本章では、FALCON2 の主要画面レイアウトをワイヤーフレームとして示す。ワイヤーフレームは機能設計と視覚的イメージを共有するための図解であり、Cursor による開発時にも参照される。
+
+13.1　メインレイアウト（コマンドライン＋サイドメニュー＋メインビュー）
+┌───────────────────────────────────────────────┐
+│  コマンドライン（自然言語 / コマンド入力）                                  │
+│  > 例：1234 / open >200 / 今月の妊娠率                           │
+├───────────────────────────────────────────────┤
+│     サイドメニュー       │            メインビュー（AI＋内容表示）              │
+│  ┌────────────────┐  ┌──────────────────────────┐ │
+│  │ ?? データ入力         │  │ ChatGPTとの対話／リスト／カード／分析表示   │ │
+│  │ ?? レポート出力      │  │                                          │ │
+│  │ ?? 分析              │  │                                          │ │
+│  │ ? 辞書・設定         │  │                                          │ │
+│  │ ?? 農場管理          │  │                                          │ │
+│  └────────────────┘  └──────────────────────────┘ │
+└───────────────────────────────────────────────┘
+
+13.2　個体カード（CowCard）
+左に基本情報、右にイベント履歴を表示する。イベント履歴は「最新→過去」の降順表示に統一する。
+
+┌───────────────────────────────────────────────┐
+│                 個体カード（CowCard）                          │
+├───────────────────────────────────────────────┤
+│  左：基本情報パネル                                        │
+│  ┌──────────────────────────┐  ┌──────────────────────┐ │
+│  │ ID: 1234      JPN10: 0123456789            │  │ DIM: 150                │ │
+│  │ 品種: ホル     生年月日: 2020-03-12          │  │ RC: 4（Bred）          │ │
+│  │ 産次: 3        最終分娩: 2024-11-01          │  │ DUED: 2025-08-03       │ │
+│  └──────────────────────────┘  └──────────────────────┘ │
+│                                                               │
+│  右：イベント履歴（タブ構造：全件／繁殖／乳検／疾病）                      │
+│  ┌──────────────────────────────────────────────┐ │
+│  │ ※ 上が最新、下が過去（降順ソート）                                           │ │
+│  │ 2025/02/11 Preg+      受胎（最新）                        │ │
+│  │ 2025/01/10 AI         SIRE=BB123 技師=45                 │ │
+│  │ 2024/11/01 分娩        単子・メス                         │ │
+│  └──────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────┘
+
+13.3　イベント入力画面（EventInputWindow）
+┌───────────────────────────────────────────────┐
+│            イベント入力（EventInputWindow）                     │
+├───────────────────────────────────────────────┤
+│ 左フォーム                                   │  右：最近の履歴（降順） │
+│ ┌──────────────────────────────┐ ┌──────────────┐ │
+│ │ イベント番号入力: [1]（AI）                 │ │ 2025/01/10 AI        │ │
+│ │ 日付:              [2025/02/11]              │ │ 2024/11/01 分娩      │ │
+│ │ SIRE:              [BB123]                   │ │                      │ │
+│ │ 技師:              [45]                      │ │                      │ │
+│ │ 種類:              [Sexed]                   │ │                      │ │
+│ │ メモ:              [............]            │ └──────────────┘ │
+│ │ [OK] [キャンセル]                             │                      │
+│ └──────────────────────────────┘                      │
+└───────────────────────────────────────────────┘
+
+13.4　農場選択画面（FarmSelector）
+┌───────────────────────────────────────────────┐
+│                 農場選択（FarmSelector）                     │
+├───────────────────────────────────────────────┤
+│ 農場一覧                                      │
+│ ┌──────────────────────────────┐               │
+│ │ FarmA（山口牧場）                            │
+│ │ FarmB（佐藤牧場）                            │
+│ │ FarmC（鈴木牧場）                            │
+│ └──────────────────────────────┘               │
+│                                                │
+│ [ 農場を開く ]   [ 新規農場作成 ]              │
+└───────────────────────────────────────────────┘
+
+13.5　まとめ
+本章で示したワイヤーフレームは、UI 実装時の基礎資料であり、Cursor によるレイアウト生成、画面遷移実装、イベント入力UI構築において参照される。特に個体カードとイベント履歴の降順表示は FALCON2 の操作性向上に直結する重要要素である。
+
+
+第14章　アプリケーション全体フロー設計
+14.0　概要
+本章では、FALCON2 のアプリケーション全体フロー（起動から終了まで）を整理する。農場選択、辞書ロード、メインループ、コマンド処理、イベント入力、RuleEngine／FormulaEngine 連携の流れを明確にし、実装時の指針とする。
+
+14.1　アプリケーションライフサイクル概要
+FALCON2 のライフサイクルは大きく以下のフェーズに分かれる：
+1. 起動・環境初期化
+2. 農場選択（FarmSelector）
+3. 辞書・DBロード
+4. メインUIループ（コマンドライン＋サイドメニュー＋メインビュー）
+5. イベント入力／編集・RuleEngine 再評価
+6. レポート出力・分析
+7. 終了処理（状態保存・クリーンアップ）
+
+14.2　起動?農場選択フロー
+起動時フローの概略は以下の通り：
+
+1. 設定ファイルの読み込み（アプリ共通設定）
+2. C:\FARMS 配下の農場フォルダ一覧取得
+3. FarmSelectorWindow を表示
+4. ユーザーが既存農場を選択 or 新規農場作成
+5. 選択された農場フォルダパスを保持してメインUIへ遷移
+
+図示：
+アプリ起動
+  ↓
+[FarmSelectorWindow 表示]
+  ↓（農場選択 or 新規作成）
+選択農場フォルダ確定
+  ↓
+共通設定・辞書・DB接続へ
+
+14.3　農場ロード（辞書・DBの初期化）
+農場選択後、以下を順に実行する：
+1. event_dictionary.json の読み込み
+2. item_dictionary.json の読み込み
+3. farm.db への接続（SQLite）
+4. 必要テーブルの存在確認・初期化（不足時は自動作成）
+5. 辞書を UI レイヤ（CowCard, EventInputWindow など）へ渡す
+6. RuleEngine／FormulaEngine のインスタンス生成
+
+これにより、UI・エンジン・DB が農場ごとの定義に同期する。
+
+14.4　メインUIループ（コマンドライン＋サイドメニュー）
+メインUIループでは、ユーザー操作をイベントとして受け取り、コマンド処理・サイドメニュー選択・AI対話要求などに振り分ける：
+
+1. コマンドライン入力イベント
+   ・数値（例：1234）→ 個体カード表示
+   ・短縮コマンド（例：open >200）→ リスト生成
+   ・自然言語（例：今月の妊娠率）→ ChatGPT 連携による分析表示
+
+2. サイドメニュー選択イベント
+   ・データ入力 → 繁殖検診入力／イベント入力／乳検連携など
+   ・レポート出力 → 繁殖／乳検／ゲノム／疾病レポート
+   ・分析 → 各種グラフ・統計画面
+   ・辞書・設定 → 辞書編集／農場設定画面
+   ・農場管理 → 農場切り替え、新規農場作成
+
+3. メインビュー描画
+   ・上記の結果として CowCard／リスト／グラフ／AI応答を中央領域に表示する。
+
+14.5　イベント入力?RuleEngine 再評価フロー
+イベント入力／編集時の処理フローは FALCON2 の中核となる：
+
+1. CowCard／リストなどから対象牛を選択
+2. EventInputWindow を開く（event_dictionary.json に基づき UI 自動生成）
+3. ユーザーが入力（input_code／日付／個別項目／メモ）→ OK
+4. 入力内容を検証（必須項目・型・日付整合性など）
+5. event テーブルへ INSERT or UPDATE
+6. 該当牛について RuleEngine を実行
+   ・産次 LACT、最終分娩日 CLVD、RC など core項目を再評価
+7. 再評価結果を cow テーブルに反映
+8. 必要に応じて FormulaEngine による計算値が再計算され、画面表示も更新
+
+イベント削除時も同様に RuleEngine を再実行し、直近イベントから状態を再構築することで矛盾を防ぐ。
+
+14.6　レポート出力フロー
+レポート出力は以下の流れで行う：
+1. サイドメニュー「レポート出力」からレポート種別を選択
+2. 期間／条件（例：DIM, RC, PEN など）を指定
+3. DB から対象牛・イベント・検査結果を抽出
+4. FormulaEngine により必要な計算項目を付与
+5. テンプレートに沿って表形式を生成（Excel／PDF／印刷用）
+6. メインビューでプレビュー or 外部ファイルとして保存
+
+これにより、繁殖検診表・乳検レポート・疾病集計などを一貫した方法で生成できる。
+
+14.7　分析（グラフ）フロー
+分析画面では、以下のようなフローでグラフを生成する：
+1. サイドメニュー「分析」から分析種別を選択 or コマンドライン／AIから要求
+2. 対象期間・条件を設定
+3. DB から必要データを抽出
+4. FormulaEngine により派生項目（DIM, DCC, CCIなど）を計算
+5. グラフ用データセットを構築
+6. メインビューにグラフを描画（折れ線、棒グラフ、散布図など）
+7. 必要なら AI による解説テキストを併記する。
+
+14.8　農場切替フロー
+農場切り替え時は現在の接続や状態を安全にクローズした上で、新しい農場をロードする：
+1. 現在の farm.db 接続をクローズ
+2. 現在表示中のビューをリセット
+3. FarmSelectorWindow を再度表示
+4. 新しい農場を選択
+5. 14.3 のフローに従って辞書・DB を再初期化
+6. メインUIループに復帰
+
+これにより、1台のPCで複数農場を安全に管理できる。
+
+14.9　終了処理フロー
+アプリ終了時のフローは以下の通り：
+1. 未保存データがないか確認（設定変更・辞書編集など）
+2. 必要に応じて確認ダイアログを表示
+3. DB 接続をクローズ
+4. ログ出力・終了状態を記録
+5. アプリケーションプロセス終了
+
+これによりデータ破損を防ぎ、安全に終了できる。
+
+14.10　まとめ
+本章で定義したアプリケーション全体フローは、FALCON2 の実装においてウィンドウ遷移設計、イベントハンドリング設計、エンジン連携設計の土台となる。特に、イベント入力後に必ず RuleEngine／FormulaEngine を介して cow の状態を再構築する点が、“壊れない牛群管理” を実現する鍵となる。
+
+
+第15章　Cursor 実装指示書（Developer Spec）
+15.0　概要
+本章は、FALCON2 を Cursor（AIコーディング支援ツール）で実装する際の開発者向け仕様書である。これまでの第0?14章で定義した設計内容を、Cursor に与えるプロンプトと開発手順としてまとめる。Python（Tkinterベースのデスクトップアプリ）、SQLite、ChatGPT API を前提とし、匿名化フィルタによる個人情報保護（標準モード：B）を厳格に遵守する。
+
+15.1　開発環境・前提条件
+・言語：Python 3 系
+・UI：Tkinter（デスクトップアプリ）
+・DB：SQLite（farm.db）
+・OS：Windows（C:\FALCON をアプリ本体、C:\FARMS を農場データ用とする）
+・AI：ChatGPT API（OpenAI）。個体識別番号（JPN10）は送信禁止。
+・使用辞書：event_dictionary.json / item_dictionary.json（農場ごとに独立）
+・本設計書が Cursor に渡される前提。
+
+15.2　推奨ディレクトリ構成
+C:\FALCON（アプリ本体）
+ ├─ app\
+ │    ├─ main.py                      # エントリポイント
+ │    ├─ db\db_handler.py             # SQLite操作
+ │    ├─ modules\
+ │    │     ├─ rule_engine.py         # イベント → cow再計算
+ │    │     ├─ formula_engine.py      # DIMなどの計算項目
+ │    │     ├─ ai_client.py           # ChatGPT APIラッパ（匿名化フィルタ内蔵）
+ │    └─ ui\
+ │          ├─ main_window.py         # メインUI（3領域）
+ │          ├─ farm_selector.py       # 農場選択
+ │          ├─ cow_card.py            # 個体カード
+ │          └─ event_input.py         # イベント入力
+ └─ config\global_settings.json
+
+C:\FARMS（農場データ）
+ └─ <FarmName>\
+        ├─ farm.db
+        ├─ event_dictionary.json
+        └─ item_dictionary.json
+
+15.3　主要コンポーネントの責務
+● db_handler.py
+ ・SQLite接続管理、CRUD、初期化、トランザクション制御
+
+● rule_engine.py
+ ・イベント履歴から LACT / CLVD / RC / AICNT などを再計算
+ ・イベント削除時も再構築し矛盾を防止
+
+● formula_engine.py
+ ・DIM / DPAI / DCC / DUED / CONC / LSIR 等の計算
+ ・item_dictionary との連動
+
+● ai_client.py
+ ・ChatGPT API に問い合わせ
+ ・JPN10 を含む個人情報は Sanitize により除去
+ ・プロンプト冒頭に匿名化宣言を自動付与
+
+● main_window.py
+ ・第11章/第13章準拠：コマンドライン・左メニュー・メインビュー
+ ・コマンド判定：数値 → 個体カード、AI依頼 → ai_client 送信
+
+● cow_card.py
+ ・基本情報表示、イベント履歴（最新→過去の降順）
+
+● event_input.py
+ ・event_dictionary に基づく動的入力フォーム生成
+ ・保存後に RuleEngine を実行して cow 状態更新
+
+● farm_selector.py
+ ・農場一覧表示／選択／新規農場テンプレート生成
+
+15.4　Cursor へのプロンプトテンプレート（重要）
+以下は Cursor に与えるためのプロンプト例。各フェーズで分割して実行する。
+【フェーズ1：DB層の実装】
+「設計書 第3章・第14章を参照して db_handler.py を作成してください。SQLite を用い、cow / event / item_value を管理し、初回起動時は CREATE TABLE を実行すること。」
+
+【フェーズ2：RuleEngine・FormulaEngine の実装】
+「設計書 第4章・第5章・第12章に従って modules/rule_engine.py と formula_engine.py を実装してください。イベント追加・削除後に LACT / CLVD / RC などが一貫性を保つように。」
+
+【フェーズ3：UI 基本構造】
+「設計書 第11章・第13章を用い、ui/main_window.py を作成し、コマンドライン・サイドメニュー・メインビューの3領域構造を実装してください。」
+
+【フェーズ4：イベント入力画面】
+「event_dictionary.json を内容に応じてフォームを動的生成する event_input.py を実装してください。」
+
+【フェーズ5：AI 連携層】
+「modules/ai_client.py を作成し、ChatGPT API を安全に利用できるようにしてください。JPN10 などの個人情報は Sanitize 処理で削除し、cow_id のみ送信すること。」
+
+15.5　実装ロードマップ（推奨手順）
+1. DBスキーマ定義・db_handler 実装
+2. RuleEngine / FormulaEngine 実装
+3. FarmSelectorWindow
+4. MainWindow（コマンドライン・メニュー・ビュー）
+5. CowCard（個体カード）
+6. EventInputWindow
+7. item_dictionary による項目制御
+8. 分析画面・レポート出力
+9. AI クライアント統合
+10. ログ・例外処理・最終調整
+
+15.6　AIセキュリティポリシー（標準モードB）
+・APIに送るIDは cow_id（拡大4桁）または auto_id のみ
+・個体識別番号（JPN10）、飼主名、獣医師名、住所等は送信禁止
+・ai_client 内に Sanitize を実装し、送信前にフィルタリング
+・プロンプト先頭に匿名化宣言を自動付与
+・AI が特定情報を生成しないよう制限する
+
+15.7　今後の拡張項目
+・Web版UI（Flask/FastAPI）への発展
+・ShiftCraft との連携
+・クラウドバックアップ・同期機能
+・APIカスタムモデルによる牛群最適化分析
+
+本Developer Specは、Cursor での実装を高速かつ安全に行うための基盤である。
+
+
+第16章　DBスキーマ設計および初期化SQLスクリプト
+16.0　概要
+本章では FALCON2 のデータベース（SQLite）構造を確定し、farm.db を生成するための初期化SQLスクリプトを定義する。DBはローカルPC内で完結し、農場ごとに独立したDBを保持する。主なテーブルは cow、event、item_value の3つで構成される。
+
+16.1　cow テーブル構造（コア項目）
+cow テーブルは牛1頭あたり1行を持つ基本テーブルで、RuleEngine によって更新される動的項目を含む。
+
+CREATE TABLE cow (
+    auto_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    cow_id       TEXT NOT NULL,              -- 拡大4桁
+    jpn10        TEXT NOT NULL,              -- 個体識別番号（外部非送信）
+    brd          TEXT,                       -- 品種
+    bthd         TEXT,                       -- 生年月日
+    entr         TEXT,                       -- 導入日
+    lact         INTEGER,                    -- 産次
+    clvd         TEXT,                       -- 最終分娩日
+    rc           INTEGER,                    -- 繁殖コード
+    pen          TEXT,                       -- 群
+    frm          TEXT,                       -- 農場コード
+    UNIQUE(cow_id, jpn10)
+);
+
+16.2　event テーブル構造（過去イベント履歴）
+全イベント履歴が格納されるテーブル。RuleEngine はこの履歴を読み取り、cow テーブルを再構築する。
+
+CREATE TABLE event (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    cow_auto_id   INTEGER NOT NULL,          -- cow.auto_id への外部キー
+    event_number  INTEGER NOT NULL,          -- FALCON2 イベント番号
+    event_date    TEXT NOT NULL,             -- 日付
+    json_data     TEXT,                      -- 動的入力フィールド（SIRE/BCS等）
+    note          TEXT,
+    deleted       INTEGER DEFAULT 0,          -- 論理削除
+    FOREIGN KEY(cow_auto_id) REFERENCES cow(auto_id)
+);
+
+CREATE INDEX idx_event_cow ON event(cow_auto_id);
+CREATE INDEX idx_event_date ON event(event_date DESC);
+
+16.3　item_value テーブル構造（カスタム項目）
+ユーザー追加項目（custom origin）の値を保持する。
+
+CREATE TABLE item_value (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    cow_auto_id  INTEGER NOT NULL,
+    item_key     TEXT NOT NULL,
+    value        TEXT,
+    FOREIGN KEY(cow_auto_id) REFERENCES cow(auto_id)
+);
+
+CREATE INDEX idx_item_cow ON item_value(cow_auto_id);
+
+16.4　初期化SQL（farm.dbを生成するスクリプト）
+以下は farm.db を生成するための初期化SQL一式である。
+
+----- init_farm.sql ---------------------------------
+PRAGMA foreign_keys = ON;
+
+-- cow table
+CREATE TABLE IF NOT EXISTS cow (
+    auto_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    cow_id       TEXT NOT NULL,
+    jpn10        TEXT NOT NULL,
+    brd          TEXT,
+    bthd         TEXT,
+    entr         TEXT,
+    lact         INTEGER,
+    clvd         TEXT,
+    rc           INTEGER,
+    pen          TEXT,
+    frm          TEXT,
+    UNIQUE(cow_id, jpn10)
+);
+
+-- event table
+CREATE TABLE IF NOT EXISTS event (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    cow_auto_id   INTEGER NOT NULL,
+    event_number  INTEGER NOT NULL,
+    event_date    TEXT NOT NULL,
+    json_data     TEXT,
+    note          TEXT,
+    deleted       INTEGER DEFAULT 0,
+    FOREIGN KEY(cow_auto_id) REFERENCES cow(auto_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_cow ON event(cow_auto_id);
+CREATE INDEX IF NOT EXISTS idx_event_date ON event(event_date DESC);
+
+-- item_value table
+CREATE TABLE IF NOT EXISTS item_value (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    cow_auto_id  INTEGER NOT NULL,
+    item_key     TEXT NOT NULL,
+    value        TEXT,
+    FOREIGN KEY(cow_auto_id) REFERENCES cow(auto_id)
+);
+CREATE INDEX IF NOT EXISTS idx_item_cow ON item_value(cow_auto_id);
+------------------------------------------------------
+
+16.5　設計上のポイント（重要）
+・cow テーブルは「現在の状態」を保持し、RuleEngine により再計算される。
+・event テーブルは「履歴の源泉」。削除時も必ず RuleEngine を再実行する。
+・event.json_data には、event_dictionary.json に対応した動的データを入れる。
+・item_value は custom 項目だけ保存し、calc/event 項目は保存しない。
+・SQLite の速度改善のため、cow_id・event_date にインデックスを付与している。
+
+16.6　まとめ
+本章では farm.db の完全なスキーマと初期化SQLを定義した。このスキーマを基盤として、RuleEngine・FormulaEngine・UI が一貫して動作する。Cursor に DB関連の実装をさせる際は、本章のSQLをそのまま参照させればよい。
+
+
+第17章　Cursor 実装マスターインストラクション（完全版）
+17.0　概要
+本章では、Cursor に対し「FALCON2 を完全実装させるための最終プロンプト」を定義する。このマスターインストラクションを Cursor に読み込ませることで、設計書に基づいた統一的な開発を自動的に開始できる。
+
+17.1　前提条件
+・Cursor は本設計書（第0?16章）と event_dictionary.json、item_dictionary.json を参照できる状態にある。
+・Python・Tkinter・SQLite のプロジェクトを生成できる。
+・ユーザーのPC環境は Windows、フォルダ構造は C:\FALCON / C:\FARMS。
+
+17.2　マスタープロンプト（Cursorに渡す全文）
+以下のテキストを Cursor にそのまま渡すことで、FALCON2 の実装準備を整えることができる：
+------------------------------------------------------------
+あなたは FALCON2（牛群管理システム）の開発エンジニアです。
+次のドキュメントをすべて読み込み、完全なデスクトップアプリとして実装してください。
+
+【提供資料】
+・FALCON2 設計書（第0?17章）
+・event_dictionary.json
+・item_dictionary.json
+
+【開発要件】
+1. Python の Tkinter を使用してデスクトップアプリを構築すること。
+2. データベースは SQLite を用い、farm.db を各農場フォルダに作成すること。
+3. フォルダ構造は C:\FALCON（アプリ本体）、C:\FARMS（農場データ）。
+4. UI は以下の3領域構成とする：
+   ・上部：コマンドライン入力エリア
+   ・左：サイドメニュー（データ入力・レポート・分析・辞書設定・農場管理）
+   ・中央：メインビュー（リスト／CowCard／AI応答など）
+5. CowCard は基本情報＋イベント履歴（最新→過去）。
+6. EventInputWindow は event_dictionary.json に基づきフォームを動的生成。
+7. Event 登録後は RuleEngine により cow の LACT・CLVD・RC を即時再計算。
+8. FormulaEngine による計算項目（DIM・DPAI・DCC など）を実装すること。
+9. ChatGPT API は ai_client.py で一元管理し、個人情報（JPN10）は送信しないこと。
+10. 農場切替機能を実装し、C:\FARMS から農場を選択してロードできること。
+
+【実装ステップ】
+1. db_handler.py（DBスキーマは第16章を参照）
+2. rule_engine.py（第4章）
+3. formula_engine.py（第5章）
+4. farm_selector.py（第14章フロー）
+5. main_window.py（第11・13章）
+6. cow_card.py（第13章）
+7. event_input.py（event_dictionary.json 連携）
+8. item_value 管理（custom項目）
+9. ai_client.py（セキュリティBモード）
+10. レポート・分析画面
+
+【重要】
+・個体識別番号（JPN10）をAPIへ送信してはならない。
+・cow_id（拡大4桁）または auto_id を AIへの識別子とする。
+------------------------------------------------------------
+
+17.3　使用方法
+1. 上記マスタープロンプトを Cursor の最初のセルに貼り付ける。
+2. 設計書ファイル・JSON辞書を Cursor に読み込ませる。
+3. Cursor が自動的にディレクトリを生成し、各ファイルを実装していく。
+4. 実装単位ごとに内容を確認し、必要に応じてプロンプトを追記する。
+
+17.4　注意点
+・辞書ファイルを変更した場合、Cursor に再ロードさせること。
+・UIレイアウトは Tkinter で破綻しやすいため、小まめに動作確認すること。
+・イベント入力→RuleEngine→CowCard 更新は FALCON2 の中心機能であり、慎重にテストすべきである。
+
+17.5　まとめ
+本章のマスタープロンプトにより、Cursor 上で FALCON2 の実装作業を包括的に開始できる。以降は Cursor と人間の協調作業により、最終プロダクトへ仕上げていくことが可能となる。
+
+
+第18章　UI詳細仕様（イベント入力・繁殖検診入力）
+18.0　概要
+本章は、FALCON2 の入力系 UI（特にイベント入力と繁殖検診入力）の詳細仕様を定義する。第11章・第13章で定義されたレイアウト構造を基盤とし、実運用における正確性・高速性・エラー防止・使いやすさを最大限確保することを目的とする。
+
+18.1　日付入力仕様
+日付入力は短縮入力を許容し、自動補完・補正する仕様とする。
+
+【基本規則】
+・「2025/2/11」：完全指定（そのまま採用）
+・「2/11」：当年の 2月11日として解釈
+・「11」：直近の「11日」として解釈
+・「1」：直近の「1日」として解釈
+・空欄：本日の日付を自動補完
+
+【直近のn日付の判定】
+・今日が 2025/02/10 の場合、「11」は 2025/01/11 のように、すでに当月を過ぎている場合は前月に遡って補正する（実装時に詳細ルールを調整）。
+
+【エラー処理】
+・補正後に存在しない日付（例：2/30）が発生した場合は「日付が存在しません」などのアラートを表示し、入力欄を赤枠で強調する。
+・文字と数字が混在するなど明らかな不正入力は即座に赤枠表示とし、OKボタンを無効化する。
+
+18.2　イベント番号・ショートカット入力
+イベント入力画面では、数値入力によりイベントを高速選択できるショートカット機能を実装する。
+
+【動作イメージ】
+・入力「1」：AI（例：イベント番号 201, input_code=1）
+・入力「8」：BCS（例：イベント番号 801, input_code=8）
+・入力「82」：RFS（例：イベント番号 802, input_code=82）
+
+【UI動作】
+・イベント番号入力欄に数字を入力すると、右側に候補イベントのポップアップを表示する。
+・Enterキーで候補を確定し、イベント種別が決まる。
+・マウス操作なしでも、一連の入力が完結することを重視する。
+
+18.3　イベント入力フォームの動的生成
+event_dictionary.json に定義された input_fields をもとに、イベント入力フォームを動的に生成する。
+
+【型ごとのUI部品】
+・datatype = int   → 数値入力ボックス（整数のみ許容）
+・datatype = float → 数値入力ボックス（小数点許容）
+・datatype = str   → 文字列入力テキストボックス
+・将来的に enum 型などを導入する場合はプルダウンを用意する。
+
+【保存形式】
+・入力された値は event.json_data に JSON形式で保存する。
+  例：AIイベントの場合
+  {
+    "sire": "BB123",
+    "technician": "45",
+    "ai_type": "Sexed"
+  }
+
+
+18.4　入力完了後の処理フロー（UI視点）
+イベント入力画面で OK が押下された後の処理は次の通りとする：
+
+1. 入力値のバリデーション（必須項目・データ型・日付整合性）
+2. 問題なければ event テーブルへ INSERT（または UPDATE）
+3. 対象牛について RuleEngine を起動し、LACT / CLVD / RC などを再計算
+4. 必要に応じて FormulaEngine により DIM / DPAI / DCC 等を再計算
+5. CowCard 表示を即時更新（イベント履歴と基本情報）
+6. EventInputWindow を閉じる
+
+一連の処理は体感的に待ち時間を感じさせない速度（0.1?0.3秒程度）を目標とする。
+
+18.5　エラー表示仕様
+入力エラーやシステムエラーの表示仕様を以下の通り定める。
+
+【入力欄エラー】
+・不正値が入力されたフィールドは赤枠で囲む。
+・フィールド直下に簡潔な説明テキストを表示（例：「整数を入力してください」）。
+・致命的なエラーがある間は OK ボタンを無効化する。
+
+【システムエラー】
+・DB接続エラーや予期せぬ例外が発生した場合はダイアログで通知する。
+・同時にログファイル（またはコンソール）に詳細情報を出力し、原因調査に備える。
+
+18.6　繁殖検診バッチ入力画面
+繁殖検診時には一度に多頭を処理することが多いため、専用のバッチ入力画面を用意する。
+
+【UI構造イメージ】
+┌───────────────┬───────────────┬───────────────┐
+│ 牛ID           │ 所見入力欄         │ 処置（プルダウン）   │
+├───────────────┼───────────────┼───────────────┤
+│ 1234           │ CMT+, 液状         │ PREG+, OPEN, TREAT   │
+│ 2345           │ 正常               │ PREG+, CHECK         │
+│ ...            │ ...                │ ...                  │
+└───────────────┴───────────────┴───────────────┘
+
+【操作性要件】
+・Enterキーで次行・次セルにフォーカス移動し、キーボード中心で入力が完結すること。
+・「一括登録」ボタンを押すと、すべての行について event レコードを生成し、RuleEngine を順次実行する。
+
+18.7　個体カードのイベント履歴パネル（視認性向上）
+個体カード右側のイベント履歴パネルについて、視認性向上のための仕様を定める。
+
+【並び順】
+・常に event_date の降順（最新→過去）で表示する。
+・タブ（全件／繁殖／乳検／疾病）いずれも同じ並び順とする。
+
+【色分け（任意設定）】
+・分娩（Calving）イベント：赤系
+・AI／ET イベント：青系
+・PREG+（妊娠判定プラス）：緑系
+・治療（TREAT）関連イベント：オレンジ系
+
+色分けにより、一覧から重要イベントを瞬時に識別できる。
+
+18.8　入力ガイド表示
+初心者ユーザーや新任担当者のために、画面下部またはサイドに簡易入力ガイドを常時表示する。
+
+【日付入力ガイド例】
+・「1」 → 直近の1日
+・「1/5」 → 今年の1月5日
+
+【数字ショートカットガイド例】
+・「1」 → AI
+・「8」 → BCS
+・「82」 → RFS
+
+これにより、マニュアルを見なくても自然にショートカットが使えるようになる。
+
+18.9　アクセシビリティ・操作性要件
+・Tabキーによるフォーカス移動を全入力欄でサポートすること。
+・Ctrl+S で保存、Esc でキャンセルなど、基本的なキーボードショートカットを実装すること。
+・標準フォントサイズは12?13pt程度とし、高齢ユーザーでも読みやすいUIを心掛ける。
+
+18.10　まとめ
+本章で定義した UI 詳細仕様により、FALCON2 のイベント入力および繁殖検診入力は、現場での実用性と操作性を兼ね備えたものとなる。Cursor による実装時は、本章の要件を満たすようにウィジェット構成・バリデーション・ショートカット処理を具体化していく。
+
+
+第19章　乳検（Milk Test）連携仕様・新規農場作成との統合
+19.0 概要
+本章では、新規農場作成フローと乳検イベント（601）の正式仕様を統合し、既存設計（第7章・第12章・第14章・第18章）で定義された仕組みに沿って、乳検データ自動取り込み機能を設計に反映させる。
+19.1 乳検イベント（601）の正式仕様
+乳検イベントは event_number=601 として定義し、月次乳検データの取り込みを担当する重要イベントである。これは新規農場作成時の初期データ生成および運用時の CSV インポート機能で用いられる。
+乳検イベント 601 の input_fields は以下の通り：
+ - milk_yield（乳量）
+ - fat（乳脂肪％）
+ - protein（乳タンパク％）
+ - snf（無脂固形分％）
+ - scc（体細胞数）
+ - ls（体細胞スコア：LogSCC 等）
+ - mun（乳中尿素窒素）
+ - bhb（乳中BHB）
+ - denovo_fa（デノボFA）
+ - preformed_fa（プレフォームFA）
+ - mixed_fa（ミックスFA）
+ - denovo_milk（デノボMilk）
+19.2 新規農場作成フローへの追加仕様
+新規農場作成では、ユーザーが基となる農場を選択した後、乳検速報 CSV を取り込むことで cow テーブルおよび event テーブルの初期化を行う。
+仕様ポイント：
+・前月値などの“過去情報”は取り込まない。
+・分娩月日、生年月日、産次、品種、cow_idや個体識別番号（10桁）は基礎項目として取り込む。分娩月日を日付とした分娩イベントを自動作成する。その際は、産次はCSVの産次のままとする。
+・導入月日は、導入作業をした日とする。ｓ
+・乳検速報 CSV の当回乳検データのみ取り込む。
+・CSV の jpn10 から cow_id（拡大4桁）を抽出し、新規 cow を作成する。
+・各牛について、最新1件の乳検イベント（601）を生成する。
+・json_data に上記12項目を保存。
+・取り込み後に FormulaEngine により派生アイテム（ピーク乳量・持続性等）を計算。
+19.3 FormulaEngine への追加要件
+乳検イベントから得られる項目を利用して、以下の二次アイテム（計算値）を生成する：
+ - peak_milk：泌乳ピーク乳量。
+ - persistency：泌乳持続性。
+ - fat_protein_ratio：脂肪／タンパク比。
+ - scc_class：体細胞クラス分類。
+ - energy_balance_index：denovo_milk 等を利用した代謝評価指数。
+19.4 UI 仕様（第18章）への統合補足
+乳検データ連携は UI 側でも次をサポートする：
+ - ・新規農場作成時の乳検CSV選択画面。
+ - ・既存農場での乳検CSVインポート機能。
+ - ・CowCard に乳量・乳質（fat/protein/scc/mun/BHB/FA系）を表示する乳質パネルを追加可能。
+19.5 第7章・第12章・第14章に対する変更点一覧
+正式な変更点は次の通り：
+ - 【第7章】新規農場作成フローに“乳検速報CSVの取り込み”を追加。
+ - 【第12章】item_dictionary に乳検12項目と派生計算項目を追加。
+ - 【第14章】アプリ全体フローに乳検インポート処理（CSV→イベント→再計算）を追加。
+ - 【第18章】乳検の UI 詳細（取り込み／修正／CowCard表示）を統合。
+19.6 まとめ
+本章の追加により、乳検イベント（601）が設計書全体に統合され、新規農場作成および運用時の乳検連携ワークフローが明確化された。Cursor による実装においても、本仕様に従うことで乳検データ処理が自動化され、一貫した DB・UI 動作を保証できる。
+
+
+追補（最終統合版）? 辞書・イベント番号・UI/農場設定の最終確定
+本追補は、これまでの追加議論・辞書更新（event_dictionary / item_dictionary）を反映し、設計書内の齟齬を解消して『実装開始可能な完全版』として確定するための最終章である。
+A. 正（Source of Truth）の定義
+イベント番号・入力番号・入力フィールドの正は、農場フォルダに配置される辞書ファイル
+（event_dictionary.json / item_dictionary.json）を最優先とする。
+本書の本文（第0?19章）に記載のイベント番号・入力番号と辞書が不一致の場合、本追補および辞書の内容を正として実装する。
+B. イベント番号の最終確定（重要：衝突解消）
+1) 乳検（Milk Test）イベントは event_number=601 に統一する（唯一の乳検）。
+2) 群変更（MOVE）は event_number=611 に再割当する。
+3) 旧『簡易乳検』イベント（event_number=100, alias=TEST）は deprecated とし、UIに表示しない。
+B-1. 乳検（601）の入力フィールド（json_data）
+乳量（milk_yield）, 乳脂肪（fat）, 乳タンパク（protein）, 無脂固形分（snf）, 体細胞数（scc）, 体細胞スコア（ls）, MUN（mun）, BHB（bhb）, デノボFA（denovo_fa）, プレフォームFA（preformed_fa）, ミックスFA（mixed_fa）, デノボMilk（denovo_milk）
+C. アイテム辞書の最終確定（乳検12項目：LAST_ 系）
+乳検（601）から常に参照できるよう、以下を item_dictionary の Event-derived/Calc として定義する。
+LAST_MILK_YIELD / LAST_FAT / LAST_PROTEIN / LAST_SNF / LAST_SCC / LAST_LS /
+LAST_MUN / LAST_BHB / LAST_DENOVO_FA / LAST_PREFORMED_FA / LAST_MIXED_FA / LAST_DENOVO_MILK
+
+これにより、CowCard・繁殖検診表・分析レポートで『イベントはあるのに表示が更新されない』問題を構造的に回避する。
+D. サイドメニュー最終確定（本文11章の更新指示）
+サイドメニューは最終的に以下の5項目に固定する（迷わないUI・繁殖検診を中核に置く）。
+
+■ 繁殖検診
+■ イベント入力
+■ データ出力
+■ 辞書設定
+■ 農場管理
+
+※本文第11章に記載の『データ入力/レポート出力/分析…』の分類は、概念整理として残してよいが、UI実装の最終仕様は本追補の5項目を正とする。
+E. 農場設定：検診表テンプレート（追加章）
+繁殖検診表は、農場ごとに『テンプレート（複数）』として定義・管理できる。
+例：標準繁殖検診表、肺エコー検診表、高SCCチェック表、疾病フォロー表 等。
+
+各テンプレートは『条件セット（複数条件＋ON/OFF）』を保持し、有効条件のみを AND 評価して対象牛を抽出する。
+E-1. 標準搭載条件（repro_settings / templates）
+・VWP（日数） ON/OFF
+・妊娠鑑定日数：最終AI/ET後 ◯日 ON/OFF
+・再妊娠鑑定日数：最終AI/ET後 ◯日 ON/OFF
+・育成牛月齢：◯ヶ月以上 ON/OFF
+・育成牛 妊娠鑑定日数 ON/OFF
+・育成牛 再妊娠鑑定日数 ON/OFF
+・任意条件（複数追加可）：条件名／参照アイテム／演算子／閾値／ON/OFF
+E-2. 出力導線
+・テンプレートの作成・編集：『辞書設定 → 農場設定』
+・テンプレートの出力：『繁殖検診 → 繁殖検診表』または『データ出力 → 任意レポート（高SCC表など）』
+F. AI連携（セキュリティ：個体識別番号の非送信）
+ChatGPT API を使用する際は、個体識別番号（JPN10）は送信禁止とする。
+AIに渡す識別子は cow_id（拡大4桁）または auto_id のみとし、送信前にサニタイズ層で混入検査を行う。
+G. 実装開始チェックリスト（最終）
+□ 農場フォルダに event_dictionary.json / item_dictionary.json が配置されている
+□ 601=乳検、611=MOVE、100=旧乳検(deprecated) が辞書に反映されている
+□ CowCardのイベント履歴は event_date DESC（最新→過去）
+□ イベント追加/編集/削除のたびに RuleEngine により cow 状態をフル再計算
+□ Calc項目は保存せず FormulaEngine で参照時計算
+□ AI送信は cow_id/auto_id のみ（JPN10禁止）

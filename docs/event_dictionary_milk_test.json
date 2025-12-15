@@ -1,0 +1,57 @@
+{
+  "601": {
+    "name": "Milk Test",
+    "category": "MILK_TEST",
+    "input_fields": [
+      {
+        "key": "milk_yield",
+        "datatype": "float"
+      },
+      {
+        "key": "fat",
+        "datatype": "float"
+      },
+      {
+        "key": "protein",
+        "datatype": "float"
+      },
+      {
+        "key": "snf",
+        "datatype": "float"
+      },
+      {
+        "key": "scc",
+        "datatype": "int"
+      },
+      {
+        "key": "ls",
+        "datatype": "float"
+      },
+      {
+        "key": "mun",
+        "datatype": "float"
+      },
+      {
+        "key": "bhb",
+        "datatype": "float"
+      },
+      {
+        "key": "denovo_fa",
+        "datatype": "float"
+      },
+      {
+        "key": "preformed_fa",
+        "datatype": "float"
+      },
+      {
+        "key": "mixed_fa",
+        "datatype": "float"
+      },
+      {
+        "key": "denovo_milk",
+        "datatype": "float"
+      }
+    ],
+    "input_code": 6
+  }
+}

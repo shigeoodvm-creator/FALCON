@@ -1,0 +1,574 @@
+{
+  "100": {
+    "alias": "TEST",
+    "name_jp": "乳検（旧）",
+    "category": "MILK_TEST",
+    "input_code": null,
+    "input_fields": [],
+    "deprecated": true
+  },
+  "101": {
+    "alias": "BCS",
+    "name_jp": "BCS",
+    "category": "PRODUCTION",
+    "input_code": null,
+    "input_fields": []
+  },
+  "102": {
+    "alias": "WGT",
+    "name_jp": "WGT",
+    "category": "PRODUCTION",
+    "input_code": null,
+    "input_fields": []
+  },
+  "103": {
+    "alias": "HYGS",
+    "name_jp": "HYGS",
+    "category": "PRODUCTION",
+    "input_code": null,
+    "input_fields": []
+  },
+  "104": {
+    "alias": "HKS",
+    "name_jp": "HKS",
+    "category": "PRODUCTION",
+    "input_code": null,
+    "input_fields": []
+  },
+  "105": {
+    "alias": "RFS",
+    "name_jp": "RFS",
+    "category": "PRODUCTION",
+    "input_code": null,
+    "input_fields": []
+  },
+  "106": {
+    "alias": "LUS",
+    "name_jp": "LUS",
+    "category": "PRODUCTION",
+    "input_code": null,
+    "input_fields": []
+  },
+  "110": {
+    "alias": "STOPM",
+    "name_jp": "STOPM",
+    "category": "PRODUCTION",
+    "input_code": null,
+    "input_fields": []
+  },
+  "200": {
+    "alias": "AI",
+    "name_jp": "AI",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": [
+      {
+        "key": "sire",
+        "label": "SIRE",
+        "datatype": "str"
+      },
+      {
+        "key": "technician_code",
+        "label": "授精師コード",
+        "datatype": "str"
+      },
+      {
+        "key": "insemination_type_code",
+        "label": "授精種類コード",
+        "datatype": "str"
+      }
+    ]
+  },
+  "201": {
+    "alias": "ET",
+    "name_jp": "ET",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": [
+      {
+        "key": "embryo_id",
+        "label": "胚ID",
+        "datatype": "str"
+      },
+      {
+        "key": "technician",
+        "label": "授精師コード",
+        "datatype": "str"
+      }
+    ]
+  },
+  "202": {
+    "alias": "CALV",
+    "name_jp": "分娩",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": [
+      {
+        "key": "calf_sex",
+        "label": "子牛の性別",
+        "datatype": "str"
+      },
+      {
+        "key": "calf_count",
+        "label": "子牛数",
+        "datatype": "int"
+      },
+      {
+        "key": "abnormal_flag",
+        "label": "異常フラグ",
+        "datatype": "str"
+      }
+    ]
+  },
+  "203": {
+    "alias": "DRY",
+    "name_jp": "乾乳",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "204": {
+    "alias": "STOPR",
+    "name_jp": "繁殖停止",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "205": {
+    "alias": "SOLD",
+    "name_jp": "売却",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "206": {
+    "alias": "DEAD",
+    "name_jp": "死亡・淘汰",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "300": {
+    "alias": "FCHK",
+    "name_jp": "フレッシュチェック",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": [
+      {
+        "key": "treatment",
+        "label": "処置",
+        "datatype": "str"
+      },
+      {
+        "key": "uterine_findings",
+        "label": "子宮所見",
+        "datatype": "str"
+      },
+      {
+        "key": "left_ovary_findings",
+        "label": "左卵巣所見",
+        "datatype": "str"
+      },
+      {
+        "key": "right_ovary_findings",
+        "label": "右卵巣所見",
+        "datatype": "str"
+      },
+      {
+        "key": "other",
+        "label": "その他",
+        "datatype": "str"
+      }
+    ]
+  },
+  "301": {
+    "alias": "REPRO",
+    "name_jp": "繁殖検査",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": [
+      {
+        "key": "treatment",
+        "label": "処置",
+        "datatype": "str"
+      },
+      {
+        "key": "uterine_findings",
+        "label": "子宮所見",
+        "datatype": "str"
+      },
+      {
+        "key": "left_ovary_findings",
+        "label": "左卵巣所見",
+        "datatype": "str"
+      },
+      {
+        "key": "right_ovary_findings",
+        "label": "右卵巣所見",
+        "datatype": "str"
+      },
+      {
+        "key": "other",
+        "label": "その他",
+        "datatype": "str"
+      }
+    ]
+  },
+  "302": {
+    "alias": "PDN",
+    "name_jp": "妊娠鑑定マイナス",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": [
+      {
+        "key": "treatment",
+        "label": "処置",
+        "datatype": "str"
+      },
+      {
+        "key": "uterine_findings",
+        "label": "子宮所見",
+        "datatype": "str"
+      },
+      {
+        "key": "left_ovary_findings",
+        "label": "左卵巣所見",
+        "datatype": "str"
+      },
+      {
+        "key": "right_ovary_findings",
+        "label": "右卵巣所見",
+        "datatype": "str"
+      },
+      {
+        "key": "other",
+        "label": "その他",
+        "datatype": "str"
+      }
+    ]
+  },
+  "303": {
+    "alias": "PDP",
+    "name_jp": "妊娠鑑定プラス",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "304": {
+    "alias": "PDP2",
+    "name_jp": "妊娠鑑定プラス：直近以外",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "305": {
+    "alias": "ABRT",
+    "name_jp": "流産",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "306": {
+    "alias": "PAGN",
+    "name_jp": "PAGマイナス",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "307": {
+    "alias": "PAGP",
+    "name_jp": "PAGプラス",
+    "category": "BREEDING",
+    "input_code": null,
+    "input_fields": []
+  },
+  "400": {
+    "alias": "MAST",
+    "name_jp": "乳房炎",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "401": {
+    "alias": "HOOF",
+    "name_jp": "蹄病",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "402": {
+    "alias": "LAME",
+    "name_jp": "跛行",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "403": {
+    "alias": "METR",
+    "name_jp": "子宮炎",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "404": {
+    "alias": "RP",
+    "name_jp": "胎盤停滞",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "405": {
+    "alias": "KETO",
+    "name_jp": "ケトーシス",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "406": {
+    "alias": "MFV",
+    "name_jp": "低Ca血症",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "407": {
+    "alias": "DA",
+    "name_jp": "第四胃変位",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "408": {
+    "alias": "RESP",
+    "name_jp": "呼吸器疾患",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "409": {
+    "alias": "GI",
+    "name_jp": "消化器疾患",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "410": {
+    "alias": "DIAR",
+    "name_jp": "下痢",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "411": {
+    "alias": "MSK",
+    "name_jp": "運動器疾患",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "412": {
+    "alias": "INJ",
+    "name_jp": "外傷",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "413": {
+    "alias": "HOTH",
+    "name_jp": "その他健康",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "600": {
+    "alias": "IN",
+    "name_jp": "導入",
+    "category": "MANAGEMENT",
+    "input_code": null,
+    "input_fields": []
+  },
+  "601": {
+    "alias": "MILK_TEST",
+    "name_jp": "乳検",
+    "category": "MILK_TEST",
+    "input_code": 6,
+    "input_fields": [
+      {
+        "key": "milk_yield",
+        "label": "乳量",
+        "datatype": "float"
+      },
+      {
+        "key": "fat",
+        "label": "乳脂肪",
+        "datatype": "float"
+      },
+      {
+        "key": "protein",
+        "label": "乳蛋白質",
+        "datatype": "float"
+      },
+      {
+        "key": "snf",
+        "label": "無脂固形分",
+        "datatype": "float"
+      },
+      {
+        "key": "scc",
+        "label": "体細胞数",
+        "datatype": "int"
+      },
+      {
+        "key": "ls",
+        "label": "LS",
+        "datatype": "float"
+      },
+      {
+        "key": "mun",
+        "label": "MUN",
+        "datatype": "float"
+      },
+      {
+        "key": "bhb",
+        "label": "BHB",
+        "datatype": "float"
+      },
+      {
+        "key": "denovo_fa",
+        "label": "de novo FA",
+        "datatype": "float"
+      },
+      {
+        "key": "preformed_fa",
+        "label": "preformed FA",
+        "datatype": "float"
+      },
+      {
+        "key": "mixed_fa",
+        "label": "mixed FA",
+        "datatype": "float"
+      },
+      {
+        "key": "denovo_milk",
+        "label": "de novo milk",
+        "datatype": "float"
+      }
+    ]
+  },
+  "602": {
+    "alias": "ISO",
+    "name_jp": "隔離",
+    "category": "MANAGEMENT",
+    "input_code": null,
+    "input_fields": []
+  },
+  "603": {
+    "alias": "PST",
+    "name_jp": "放牧開始",
+    "category": "MANAGEMENT",
+    "input_code": null,
+    "input_fields": []
+  },
+  "604": {
+    "alias": "PSTE",
+    "name_jp": "放牧終了",
+    "category": "MANAGEMENT",
+    "input_code": null,
+    "input_fields": []
+  },
+  "611": {
+    "alias": "MOVE",
+    "name_jp": "群変更",
+    "category": "MANAGEMENT",
+    "input_code": 61,
+    "input_fields": [
+      {
+        "key": "from_pen",
+        "label": "移動元",
+        "datatype": "str"
+      },
+      {
+        "key": "to_pen",
+        "label": "移動先",
+        "datatype": "str"
+      }
+    ]
+  },
+  "620": {
+    "alias": "TRIM",
+    "name_jp": "TRIM",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "621": {
+    "alias": "TRIMA",
+    "name_jp": "TRIMA",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "622": {
+    "alias": "VACC",
+    "name_jp": "VACC",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "623": {
+    "alias": "VACCA",
+    "name_jp": "VACCA",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "624": {
+    "alias": "DEW",
+    "name_jp": "DEW",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "625": {
+    "alias": "SAMP",
+    "name_jp": "SAMP",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "626": {
+    "alias": "LAB",
+    "name_jp": "LAB",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "627": {
+    "alias": "FEC",
+    "name_jp": "FEC",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "628": {
+    "alias": "CFEED",
+    "name_jp": "CFEED",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "629": {
+    "alias": "FEED",
+    "name_jp": "FEED",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "630": {
+    "alias": "TOTH",
+    "name_jp": "TOTH",
+    "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  }
+}
