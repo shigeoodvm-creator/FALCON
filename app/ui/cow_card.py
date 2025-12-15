@@ -447,7 +447,15 @@ class CowCard:
             name_label = ttk.Label(row_frame, text=f"{name}:")
             name_label.grid(row=0, column=0, sticky=tk.W, padx=5)
             
-            value_text = self._format_calc_value(item_code, calculated.get(item_code) if item_code else None)
+            # 計算値を取得（None の場合は None、それ以外はそのまま）
+            raw_value = calculated.get(item_code) if item_code else None
+            # デバッグログ
+            if item_code:
+                logging.info(
+                    f"[CowCard] calc item={item_code} value={raw_value} type={type(raw_value)}"
+                )
+            
+            value_text = self._format_calc_value(item_code, raw_value)
             value_label = ttk.Label(row_frame, text=value_text, foreground="green")
             value_label.grid(row=0, column=1, sticky=tk.W, padx=5)
             
@@ -629,32 +637,37 @@ class CowCard:
         return fallback_names.get(item_code, item_code)
     
     def _format_calc_value(self, item_code: Optional[str], value: Any) -> str:
-        """値の表示フォーマット"""
+        """
+        値の表示フォーマット
+        
+        Args:
+            item_code: 項目コード
+            value: 値（None の場合は空文字列を返す、0 / 0.0 は有効な値として表示）
+        
+        Returns:
+            フォーマットされた文字列
+        """
+        # None のみを空表示にする（0 / 0.0 は有効な値として表示）
         if item_code is None or value is None:
             return ""
+        
+        # 数値型の場合はそのまま表示（0 / 0.0 も含む）
         if item_code in ['DIM', 'DPAI']:
             return f"{value}日"
-        if item_code in ['LAST_MILK_YIELD']:
-            return f"{value}kg"
-        if item_code in ['LAST_FAT', 'LAST_PROTEIN', 'LAST_SNF']:
-            return f"{value}%"
-        if 'SCC' in item_code:
-            try:
-                return f"{int(value):,}"
-            except Exception:
-                return str(value)
+        # 削除された項目（LAST_MILK_YIELD, LAST_FAT, LAST_PROTEIN, LAST_SNF, LAST_SCC等）は
+        # item_dictionaryから削除されているため、通常はここに来ないが、
+        # 念のため存在チェックを追加（削除された項目はそのまま文字列として表示）
+        # その他の項目も 0 / 0.0 を含めて表示
         return str(value)
     
     def _load_calculated_item_codes(self) -> List[str]:
         """表示定義リストをロード（無ければデフォルト生成）"""
+        # 削除された項目（LAST_MILK_YIELD, LAST_FAT, LAST_PROTEIN, LAST_SCC等）は
+        # item_dictionaryから削除されているため、デフォルトから除外
         default_codes = [
             "DIM",
             "DPAI",
             "DUE",
-            "LAST_MILK_YIELD",
-            "LAST_FAT",
-            "LAST_PROTEIN",
-            "LAST_SCC",
         ]
         path = self.calculated_items_path
         try:

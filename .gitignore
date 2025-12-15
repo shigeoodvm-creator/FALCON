@@ -13,7 +13,7 @@ __pycache__/
 *.sqlite
 *.sqlite3
 
-# Farm data directory
+# Farm data directories
 FARMS/
 
 # Temporary CSV files
@@ -33,31 +33,16 @@ env/
 *.swo
 *~
 
-# OS files
+# OS
 Thumbs.db
 .DS_Store
 desktop.ini
 
-# Microsoft Office temporary files
-~$*.docx
-~$*.doc
-~$*.xlsx
-~$*.xls
-~$*.pptx
-~$*.ppt
+# Temporary files
+*.tmp
+*.bak
+*.cache
 
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-.eggs/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Environment variables
-.env
-.env.local
+# Office temporary files
+~$*
 
