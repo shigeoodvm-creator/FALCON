@@ -459,6 +459,21 @@ class CowCard:
             value_label = ttk.Label(row_frame, text=value_text, foreground="green")
             value_label.grid(row=0, column=1, sticky=tk.W, padx=5)
             
+            # editableな項目の場合はダブルクリックで編集可能
+            if item_code:
+                item_dict = getattr(self.formula_engine, "item_dictionary", {}) or {}
+                item_def = item_dict.get(item_code, {})
+                if item_def.get("editable", False):
+                    # ダブルクリックで編集
+                    for widget in (row_frame, name_label, value_label):
+                        widget.bind(
+                            '<Double-Button-1>',
+                            lambda e, code=item_code: self._on_edit_calc_item(code)
+                        )
+                        # 編集可能であることを示すカーソル
+                        widget.bind('<Enter>', lambda e, w=widget: w.config(cursor='hand2'))
+                        widget.bind('<Leave>', lambda e, w=widget: w.config(cursor=''))
+            
             # 右クリックメニュー
             for widget in (row_frame, name_label, value_label):
                 widget.bind(
@@ -533,6 +548,85 @@ class CowCard:
         self._save_calculated_item_codes()
         logging.info(f"CowCard calculated item removed: {item_code}")
         self.refresh_calculated_items()
+    
+    def _on_edit_calc_item(self, item_code: str):
+        """editableな計算項目を編集"""
+        if not self.cow_auto_id:
+            messagebox.showwarning("警告", "対象牛が設定されていません")
+            return
+        
+        # 現在の値を取得
+        calculated = self.formula_engine.calculate(self.cow_auto_id)
+        current_value = calculated.get(item_code)
+        
+        # 項目定義を取得
+        item_dict = getattr(self.formula_engine, "item_dictionary", {}) or {}
+        item_def = item_dict.get(item_code, {})
+        display_name = item_def.get("display_name") or item_def.get("label") or item_code
+        data_type = item_def.get("data_type", "str")
+        
+        # 編集ダイアログを表示
+        dialog = tk.Toplevel(self.frame)
+        dialog.title(f"{display_name}を編集")
+        dialog.geometry("300x150")
+        dialog.transient(self.frame.winfo_toplevel())
+        dialog.grab_set()
+        
+        ttk.Label(dialog, text=f"{display_name}:").pack(pady=10)
+        
+        # 入力フィールド
+        entry = ttk.Entry(dialog, width=20)
+        entry.pack(pady=5)
+        
+        # 現在の値を設定
+        if current_value is not None:
+            entry.insert(0, str(current_value))
+        entry.select_range(0, tk.END)
+        entry.focus()
+        
+        def on_ok():
+            try:
+                value_str = entry.get().strip()
+                
+                # データ型に応じて変換
+                if data_type == "int":
+                    value = int(value_str) if value_str else None
+                elif data_type == "float":
+                    value = float(value_str) if value_str else None
+                else:
+                    value = value_str if value_str else None
+                
+                # item_valueテーブルに保存
+                if value is not None:
+                    self.db.set_item_value(self.cow_auto_id, item_code, value)
+                    logging.info(f"CowCard editable calc item updated: {item_code}={value}")
+                else:
+                    # Noneの場合は削除（item_valueテーブルから削除する必要があるが、現在のDBHandlerには削除メソッドがない）
+                    # とりあえず空文字列を保存
+                    self.db.set_item_value(self.cow_auto_id, item_code, "")
+                    logging.info(f"CowCard editable calc item cleared: {item_code}")
+                
+                # 表示を更新
+                self.refresh_calculated_items()
+                dialog.destroy()
+            except ValueError:
+                messagebox.showerror("エラー", f"無効な値です。{data_type}型の値を入力してください。")
+        
+        def on_cancel():
+            dialog.destroy()
+        
+        # EnterキーでOK
+        entry.bind('<Return>', lambda e: on_ok())
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="キャンセル", command=on_cancel, width=10).pack(side=tk.LEFT, padx=5)
+        
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
     
     def _select_item_from_dictionary(self, initial_code: Optional[str] = None) -> Optional[str]:
         """Item Dictionary から計算項目を選択"""

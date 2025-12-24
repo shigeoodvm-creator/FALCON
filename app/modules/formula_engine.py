@@ -88,6 +88,27 @@ class FormulaEngine:
         logging.debug(f"[FormulaEngine] formula_items: {formula_items}")
         result.update(formula_items)
         
+        # 3. editableな計算項目の場合、item_valueテーブルから値を取得して上書き
+        # （ユーザーが手動で編集した値があれば、それを優先）
+        for item_key in result.keys():
+            item_def = self.item_dictionary.get(item_key, {})
+            if item_def.get("editable", False):
+                # item_valueテーブルから値を取得
+                custom_value = self.db.get_item_value(cow_auto_id, item_key)
+                if custom_value is not None:
+                    # データ型に応じて変換
+                    data_type = item_def.get("data_type", "str")
+                    try:
+                        if data_type == "int":
+                            result[item_key] = int(custom_value)
+                        elif data_type == "float":
+                            result[item_key] = float(custom_value)
+                        else:
+                            result[item_key] = custom_value
+                    except (ValueError, TypeError):
+                        # 変換エラーの場合は文字列のまま
+                        result[item_key] = custom_value
+        
         logging.info(f"[FormulaEngine] calculate result: {result}")
         return result
     
@@ -237,6 +258,62 @@ class FormulaEngine:
             return due_date.strftime('%Y-%m-%d')
         except (ValueError, TypeError):
             return None
+    
+    def _calculate_breeding_count(self, events: list) -> int:
+        """
+        授精回数を計算
+        
+        AIイベント（200）またはETイベント（201）により1加算される。
+        ただし、前回のAI/ETイベントから7日以内の場合は1回のAI/ETとみなし、加算しない。
+        
+        Args:
+            events: イベントリスト
+        
+        Returns:
+            授精回数（整数）
+        """
+        # AI/ETイベントを取得
+        ai_et_events = [
+            e for e in events
+            if e.get('event_number') in [200, 201]  # AI, ET
+            and e.get('event_date')  # event_dateが存在するもののみ
+        ]
+        
+        if not ai_et_events:
+            return 0
+        
+        # 日付順にソート（古い順：昇順）
+        sorted_events = sorted(
+            ai_et_events,
+            key=lambda e: (e.get('event_date', ''), e.get('id', 0))
+        )
+        
+        count = 0
+        last_date = None
+        
+        for event in sorted_events:
+            event_date = event.get('event_date')
+            if not event_date:
+                continue
+            
+            try:
+                current_date = datetime.strptime(event_date, '%Y-%m-%d')
+                
+                # 最初のイベント、または前回から7日以上経過している場合はカウント
+                if last_date is None:
+                    count += 1
+                    last_date = current_date
+                else:
+                    days_diff = (current_date - last_date).days
+                    if days_diff >= 7:
+                        count += 1
+                        last_date = current_date
+                    # 7日以内の場合はスキップ（last_dateは更新しない）
+            except (ValueError, TypeError):
+                # 日付パースエラーの場合はスキップ
+                continue
+        
+        return count
 
     def _calculate_source_items(self, events: list) -> Dict[str, Any]:
         """
@@ -368,6 +445,7 @@ class FormulaEngine:
                 "dim": lambda clvd: self._calculate_dim(clvd),  # DIM 計算関数
                 "dpai": lambda evs: self._calculate_dpai(self._get_last_ai_date(evs)),  # DPAI 計算関数
                 "due_date": lambda evs, clvd: self._calculate_due_date(evs, clvd),  # DUE 計算関数
+                "breeding_count": lambda evs: self._calculate_breeding_count(evs),  # BRED 計算関数
             }
             try:
                 value = eval(formula, {"__builtins__": safe_builtins}, local_ctx)

@@ -4,20 +4,32 @@
     "origin": "calc",
     "data_type": "int",
     "formula": "dim(cow.get('clvd'))",
-    "display_name": "分娩後日数"
+    "display_name": "分娩後日数",
+    "category": "CORE"
   },
   "DPAI": {
     "type": "calc",
     "origin": "calc",
     "data_type": "int",
     "formula": "dpai(events)",
-    "display_name": "最終AI後日数"
+    "display_name": "最終AI後日数",
+    "category": "BREEDING"
   },
   "DUE": {
     "type": "calc",
     "origin": "calc",
     "data_type": "str",
     "formula": "due_date(events, cow.get('clvd'))",
-    "display_name": "分娩予定日"
+    "display_name": "分娩予定日",
+    "category": "BREEDING"
+  },
+  "BRED": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "breeding_count(events)",
+    "display_name": "授精回数",
+    "editable": true,
+    "category": "BREEDING"
   }
 }
