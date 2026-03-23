@@ -706,6 +706,23 @@ class DashboardMixin:
             if event.get('event_date') == latest_milk_test_date
         ]
         
+        # 分娩イベント：検定日以前で最新の分娩日を採用（検定時点のDIMを再現）
+        calv_events = self.db.get_events_by_number(RuleEngine.EVENT_CALV, include_deleted=False)
+        calv_dates_by_cow: Dict[int, List[str]] = {}
+        for calv_event in calv_events:
+            cow_auto_id = calv_event.get('cow_auto_id')
+            event_date = calv_event.get('event_date')
+            if not cow_auto_id or not event_date:
+                continue
+            try:
+                cow_auto_id_int = int(cow_auto_id)
+            except (ValueError, TypeError):
+                continue
+            date_str = str(event_date).strip()[:10]
+            calv_dates_by_cow.setdefault(cow_auto_id_int, []).append(date_str)
+        for cow_auto_id_int in calv_dates_by_cow:
+            calv_dates_by_cow[cow_auto_id_int].sort()
+        
         milk_points = []  # (dim, milk_yield, parity)
         ls_points = []    # (dim, ls, parity)
         
@@ -722,6 +739,18 @@ class DashboardMixin:
                 return None
             return (event_dt - clvd_dt).days
         
+        def clvd_for_milk_dim(cow_auto_id: Any, cow: Optional[Dict[str, Any]]) -> Optional[str]:
+            """検定日時点の直近分娩日。イベントが無い場合は cow.clvd を補助的に使用。"""
+            try:
+                cow_auto_id_int = int(cow_auto_id)
+            except (ValueError, TypeError):
+                return cow.get('clvd') if cow else None
+            dates = calv_dates_by_cow.get(cow_auto_id_int, [])
+            on_or_before = [d for d in dates if d <= latest_milk_test_date]
+            if on_or_before:
+                return max(on_or_before)
+            return cow.get('clvd') if cow else None
+        
         for event in latest_milk_test_events:
             cow_auto_id = event.get('cow_auto_id')
             if not cow_auto_id:
@@ -736,8 +765,16 @@ class DashboardMixin:
             if not cow:
                 continue
             
-            # 経産牛（LACT>=1）のみを対象
-            lact = cow.get('lact', 0)
+            # 産次は検定時点の値を優先（event_lact）。欠損時のみ cow.lact を使用
+            lact_at_test = event.get('event_lact')
+            if lact_at_test is None:
+                lact_at_test = cow.get('lact', 0)
+            try:
+                lact = int(lact_at_test)
+            except (ValueError, TypeError):
+                continue
+            
+            # 経産牛（検定時産次 >= 1）のみを対象
             if lact < 1:
                 continue
             
@@ -750,7 +787,7 @@ class DashboardMixin:
                 parity = 3
             
             # 検定時のDIMを計算
-            clvd = cow.get('clvd')
+            clvd = clvd_for_milk_dim(cow_auto_id, cow)
             dim = calc_dim_on_date(clvd, latest_milk_test_date)
             if dim is None:
                 continue

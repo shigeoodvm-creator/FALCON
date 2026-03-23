@@ -2510,7 +2510,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                                         lambda: self._on_command_dictionary(dialog))
         self._build_unified_dialog_card(content, "", "項目辞書", "項目の辞書を編集します", "開く",
                                         lambda: self._on_item_dictionary(dialog))
-        self._build_unified_dialog_card(content, "", "SIRE一覧", "使用済みSIREの一覧と種別（乳用種レギュラー／乳用種♀等）の設定", "開く",
+        self._build_unified_dialog_card(content, "", "SIRE一覧", "SIRE一覧と種別を設定します", "開く",
                                         lambda: self._on_sire_list(dialog))
         self._build_unified_dialog_card(content, "", "農場設定", "授精設定・ペン設定など農場の設定を編集します", "開く",
                                         lambda: self._on_farm_settings(dialog))

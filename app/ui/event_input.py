@@ -3030,6 +3030,169 @@ class EventInputWindow:
         
         return True
     
+    @staticmethod
+    def _parse_date_safe(date_str: Optional[str]) -> Optional[datetime]:
+        if not date_str:
+            return None
+        try:
+            return datetime.strptime(str(date_str)[:10], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return None
+    
+    def _get_events_for_warning_check(self, cow_auto_id: int) -> List[Dict[str, Any]]:
+        """警告判定用にイベント一覧を取得（編集中イベントは除外）。"""
+        events = self.db.get_events_by_cow(cow_auto_id, include_deleted=False)
+        result: List[Dict[str, Any]] = []
+        for event in events:
+            event_id = event.get("id")
+            if self.event_id is not None and event_id == self.event_id:
+                continue
+            if not event.get("event_date"):
+                continue
+            result.append(event)
+        result.sort(key=lambda e: (e.get("event_date", ""), e.get("id", 0)))
+        return result
+    
+    def _build_suspicious_input_warnings(
+        self,
+        cow_auto_id: int,
+        event_number: int,
+        event_date: str,
+        json_data: Dict[str, Any],
+    ) -> List[str]:
+        """入力内容の注意喚起メッセージを生成（保存は可能）。"""
+        warnings: List[str] = []
+        target_dt = self._parse_date_safe(event_date)
+        if target_dt is None:
+            return warnings
+        
+        events = self._get_events_for_warning_check(cow_auto_id)
+        events_on_or_before = [
+            e for e in events
+            if (e.get("event_date") or "")[:10] <= event_date
+        ]
+        
+        ai_et_numbers = {RuleEngine.EVENT_AI, RuleEngine.EVENT_ET}
+        preg_pos_numbers = {RuleEngine.EVENT_PDP, RuleEngine.EVENT_PDP2, RuleEngine.EVENT_PAGP}
+        preg_check_numbers = preg_pos_numbers | {RuleEngine.EVENT_PDN, RuleEngine.EVENT_PAGN}
+        
+        latest_ai_et = None
+        for e in reversed(events_on_or_before):
+            if e.get("event_number") in ai_et_numbers:
+                latest_ai_et = e
+                break
+        
+        # 1) 授精後25日以内の妊娠鑑定（+/-）
+        if event_number in preg_check_numbers and latest_ai_et:
+            ai_dt = self._parse_date_safe(latest_ai_et.get("event_date"))
+            if ai_dt is not None:
+                days_after_ai = (target_dt - ai_dt).days
+                if 0 <= days_after_ai < 25:
+                    warnings.append(
+                        f"授精後{days_after_ai}日で妊娠鑑定（+/-）を入力しようとしています。"
+                        "通常、授精後25日以内の妊娠鑑定は困難です。"
+                    )
+        
+        # 4) 授精イベントなしで妊娠鑑定（+/-）
+        if event_number in preg_check_numbers and latest_ai_et is None:
+            if event_number in preg_pos_numbers:
+                warnings.append(
+                    "授精イベントがない状態で妊娠鑑定プラスを入力しようとしています。"
+                    "受胎日を指定するか、不明として扱うか確認してください（不明の場合、分娩予定日も不明になります）。"
+                )
+            else:
+                warnings.append(
+                    "授精イベントがない状態で妊娠鑑定マイナスを入力しようとしています。"
+                )
+        
+        # RuleEngineで当日直前の状態を取得（受胎日・妊娠状態判定に利用）
+        state_before = None
+        try:
+            day_before = (target_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+            state_before = self.rule_engine.apply_events_until_date(cow_auto_id, day_before)
+        except Exception:
+            state_before = None
+        
+        # 2) 受胎日から270日以内の分娩
+        if event_number == RuleEngine.EVENT_CALV and state_before:
+            conception_date = state_before.get("conception_date")
+            conc_dt = self._parse_date_safe(conception_date)
+            if conc_dt is not None:
+                gest_days = (target_dt - conc_dt).days
+                if 0 <= gest_days < 270:
+                    warnings.append(
+                        f"受胎日から{gest_days}日で分娩を入力しようとしています。"
+                        "通常の妊娠期間より短い可能性があります。"
+                    )
+        
+        # 3) 受胎していない状態で分娩
+        if event_number == RuleEngine.EVENT_CALV and state_before:
+            rc_before = state_before.get("rc")
+            if rc_before != RuleEngine.RC_PREGNANT:
+                warnings.append(
+                    "受胎中（妊娠中）になっていない状態で分娩を入力しようとしています。"
+                    "妊娠鑑定プラス未入力などの可能性があります。"
+                )
+        
+        # 5) 月齢11か月以内で授精
+        if event_number in ai_et_numbers:
+            cow = self.db.get_cow_by_auto_id(cow_auto_id)
+            if cow:
+                bthd_dt = self._parse_date_safe(cow.get("bthd"))
+                if bthd_dt is not None and target_dt >= bthd_dt:
+                    age_months = (target_dt.year - bthd_dt.year) * 12 + (target_dt.month - bthd_dt.month)
+                    if target_dt.day < bthd_dt.day:
+                        age_months -= 1
+                    if age_months <= 11:
+                        warnings.append(
+                            f"授精時の月齢が{age_months}か月です。個体取り違いなどがないか確認してください。"
+                        )
+        
+        # 6) 分娩後30日以内の授精
+        if event_number in ai_et_numbers:
+            latest_calv_dt = None
+            for e in reversed(events_on_or_before):
+                if e.get("event_number") == RuleEngine.EVENT_CALV:
+                    latest_calv_dt = self._parse_date_safe(e.get("event_date"))
+                    if latest_calv_dt is not None:
+                        break
+            if latest_calv_dt is None:
+                cow = self.db.get_cow_by_auto_id(cow_auto_id)
+                if cow:
+                    clvd_dt = self._parse_date_safe(cow.get("clvd"))
+                    if clvd_dt is not None and clvd_dt <= target_dt:
+                        latest_calv_dt = clvd_dt
+            if latest_calv_dt is not None:
+                days_post_calving = (target_dt - latest_calv_dt).days
+                if 0 <= days_post_calving < 30:
+                    warnings.append(
+                        f"分娩後{days_post_calving}日で授精を入力しようとしています。"
+                        "分娩後30日以内の授精の可能性があります。"
+                    )
+        
+        return warnings
+    
+    def _confirm_suspicious_input_warnings(
+        self,
+        cow_auto_id: int,
+        event_number: int,
+        event_date: str,
+        json_data: Dict[str, Any],
+    ) -> bool:
+        warnings = self._build_suspicious_input_warnings(
+            cow_auto_id=cow_auto_id,
+            event_number=event_number,
+            event_date=event_date,
+            json_data=json_data,
+        )
+        if not warnings:
+            return True
+        
+        lines = ["以下の内容は入力ミスの可能性があります。"] + [f"{idx}. {msg}" for idx, msg in enumerate(warnings, start=1)]
+        lines.append("")
+        lines.append("このまま保存しますか？")
+        return messagebox.askyesno("入力内容の確認", "\n".join(lines))
+    
     def _on_ok(self):
         """OKボタンクリック時の処理"""
         if not self._validate_input():
@@ -3193,6 +3356,14 @@ class EventInputWindow:
             saved_event_number = self.selected_event_number
             
             if self.event_id:
+                if self.cow_auto_id is not None:
+                    if not self._confirm_suspicious_input_warnings(
+                        cow_auto_id=self.cow_auto_id,
+                        event_number=self.selected_event_number,
+                        event_date=normalized_date,
+                        json_data=json_data,
+                    ):
+                        return
                 # 更新（新規・編集で同じ json_data を使用）
                 event_data = {
                     'event_number': self.selected_event_number,
@@ -3277,6 +3448,14 @@ class EventInputWindow:
                 # cow_auto_idがまだNoneの場合はエラー
                 if self.cow_auto_id is None:
                     messagebox.showerror("エラー", "牛IDを解決できませんでした")
+                    return
+                
+                if not self._confirm_suspicious_input_warnings(
+                    cow_auto_id=self.cow_auto_id,
+                    event_number=self.selected_event_number,
+                    event_date=normalized_date,
+                    json_data=json_data,
+                ):
                     return
 
                 # 導入イベントで分娩月日が入力されている場合は分娩イベントを自動作成

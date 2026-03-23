@@ -27,6 +27,7 @@ VISIT_RATING_KEYS = [
 VISIT_NOTES_LINES = 8  # 全体＋7部門と1行ずつ対応
 
 from db.db_handler import DBHandler
+from modules.activity_log import record_from_event
 from modules.formula_engine import FormulaEngine
 from modules.rule_engine import RuleEngine
 from modules.reproduction_checkup_logic import ReproductionCheckupLogic
@@ -1394,6 +1395,15 @@ class ReproductionCheckupInputWindow:
                         }
                         event_id = self.db.insert_event(event_data_bcs)
                         self.rule_engine.on_event_added(event_id)
+                        record_from_event(
+                            self.db,
+                            cow_auto_id=cow_auto_id,
+                            action="登録",
+                            event_number=EVENT_BCS,
+                            event_id=event_id,
+                            event_date=self.checkup_date,
+                            event_dictionary=None,
+                        )
                         saved_count += 1
                     except Exception as e:
                         messagebox.showerror("エラー", f"BCSイベントの保存に失敗しました: {e}")
@@ -1531,6 +1541,15 @@ class ReproductionCheckupInputWindow:
             try:
                 event_id = self.db.insert_event(event_data)
                 self.rule_engine.on_event_added(event_id)
+                record_from_event(
+                    self.db,
+                    cow_auto_id=cow_auto_id,
+                    action="登録",
+                    event_number=event_number,
+                    event_id=event_id,
+                    event_date=self.checkup_date,
+                    event_dictionary=None,
+                )
                 saved_count += 1
                 removed_row_ids.add(row_id)
             except Exception as e:

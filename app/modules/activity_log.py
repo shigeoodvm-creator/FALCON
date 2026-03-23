@@ -16,7 +16,7 @@ from constants import APP_CONFIG_DIR
 
 logger = logging.getLogger(__name__)
 
-_MAX_ENTRIES = 500
+_MAX_ENTRIES = 1000
 _LOG_FILE = APP_CONFIG_DIR / "activity_log.json"
 _lock = threading.Lock()
 
