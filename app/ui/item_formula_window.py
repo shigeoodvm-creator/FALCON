@@ -37,8 +37,6 @@ class ItemFormulaWindow:
         self.window = tk.Toplevel(parent)
         self.window.title(f"計算式を確認 - {item_key}")
         self.window.geometry("760x560")
-        self.window.transient(parent)
-        self.window.grab_set()
 
         self._create_widgets()
         self._populate_fields()
@@ -121,6 +119,9 @@ class ItemFormulaWindow:
 
         item_dict[self.item_key] = current
         try:
+            # フォルダが存在しない場合は作成
+            if self.item_dictionary_path:
+                self.item_dictionary_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.item_dictionary_path, "w", encoding="utf-8") as f:
                 json.dump(item_dict, f, ensure_ascii=False, indent=2)
             messagebox.showinfo("完了", "計算式を保存しました")
@@ -206,5 +207,42 @@ class ItemFormulaWindow:
 
     def show(self):
         self.window.wait_window()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

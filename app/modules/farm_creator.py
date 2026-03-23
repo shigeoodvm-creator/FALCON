@@ -60,9 +60,7 @@ class FarmCreator:
         settings = SettingsManager(self.farm_path)
         settings.set("farm_name", farm_name)
         
-        # 辞書ファイルをコピー
-        app_root = Path(__file__).parent.parent.parent
-        self._copy_dictionary_files(app_root)
+        # 項目辞書・イベント辞書は本体（config_default）を参照するため農場にはコピーしない
         
         # テンプレート農場から設定をコピー（オプション）
         if template_farm_path:
@@ -76,28 +74,28 @@ class FarmCreator:
         
         return self.farm_path
     
-    def _copy_dictionary_files(self, app_root: Path):
-        """辞書ファイルをコピー"""
-        docs_dir = app_root / "docs"
-        
-        # event_dictionary.json
-        source_dict = docs_dir / "event_dictionary.json"
-        if source_dict.exists():
-            shutil.copy2(source_dict, self.farm_path / "event_dictionary.json")
-        
-        # item_dictionary.json
-        source_item_dict = docs_dir / "item_dictionary.json"
-        if source_item_dict.exists():
-            shutil.copy2(source_item_dict, self.farm_path / "item_dictionary.json")
-    
     def _copy_template_settings(self, template_farm_path: Path):
         """テンプレート農場から設定をコピー"""
         template_settings = SettingsManager(template_farm_path)
-        template_settings.load()
+        template_data = template_settings.load()
         
-        # 検診表テンプレートなどをコピー（必要に応じて拡張）
-        # 現時点では基本設定のみ
-        pass
+        target_settings = SettingsManager(self.farm_path)
+        target_settings.load()
+        
+        # farm_settings.json 内の設定を引き継ぐ
+        for key in ["pen_settings", "repro_checkup_settings", "inseminator_codes", "insemination_type_codes"]:
+            if key in template_data:
+                target_settings.set(key, template_data.get(key))
+        
+        # 授精設定ファイル（授精師・授精種類）をコピー
+        insemination_settings_file = template_farm_path / "insemination_settings.json"
+        if insemination_settings_file.exists():
+            shutil.copy2(insemination_settings_file, self.farm_path / "insemination_settings.json")
+        
+        # 繁殖処置設定ファイルをコピー
+        reproduction_treatment_settings_file = template_farm_path / "reproduction_treatment_settings.json"
+        if reproduction_treatment_settings_file.exists():
+            shutil.copy2(reproduction_treatment_settings_file, self.farm_path / "reproduction_treatment_settings.json")
     
     def _import_from_csv(self, db: DBHandler, csv_path: Path):
         """

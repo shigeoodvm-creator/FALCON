@@ -1,19 +1,122 @@
 {
+  "BTHD": {
+    "type": "core",
+    "origin": "core",
+    "data_type": "str",
+    "formula": "cow.get('bthd')",
+    "display_name": "生年月日",
+    "description": "略称: BirTH Date（生年月日）",
+    "category": "CORE"
+  },
+  "LACT": {
+    "type": "core",
+    "origin": "core",
+    "data_type": "int",
+    "formula": "cow.get('lact')",
+    "display_name": "産次",
+    "description": "略称: LACTation（産次）",
+    "category": "CORE"
+  },
+  "BRD": {
+    "type": "core",
+    "origin": "core",
+    "data_type": "str",
+    "formula": "cow.get('brd')",
+    "display_name": "品種",
+    "description": "略称: BReeD（品種）",
+    "category": "CORE"
+  },
+  "COW_ID": {
+    "type": "core",
+    "origin": "core",
+    "data_type": "str",
+    "formula": "cow.get('cow_id')",
+    "display_name": "拡大4桁ID",
+    "description": "略称: COW_ID（拡大4桁ID）",
+    "category": "CORE"
+  },
+  "JPN10": {
+    "type": "core",
+    "origin": "core",
+    "data_type": "str",
+    "formula": "cow.get('jpn10')",
+    "display_name": "個体識別番号（１０桁）",
+    "description": "略称: JPN 10 digits（個体識別番号10桁）",
+    "category": "CORE"
+  },
+  "RC": {
+    "type": "core",
+    "origin": "core",
+    "data_type": "int",
+    "formula": "cow.get('rc')",
+    "display_name": "繁殖コード",
+    "description": "略称: Reproduction Code（繁殖コード）\n\n繁殖コード定義:\n1: Stopped（繁殖停止）\n2: Fresh（分娩後）\n3: Bred（授精後）\n4: Open（空胎）\n5: Pregnant（妊娠中）\n6: Dry（乾乳中）",
+    "category": "CORE"
+  },
+  "PEN": {
+    "type": "core",
+    "origin": "core",
+    "data_type": "str",
+    "formula": "cow.get('pen')",
+    "display_name": "群",
+    "description": "略称: PEN（群）",
+    "category": "CORE"
+  },
+  "DAM": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "dam_jpn10(events, cow)",
+    "display_name": "母牛",
+    "description": "略称: DAM（母牛のJPN10）",
+    "editable": true,
+    "category": "CORE"
+  },
+  "SIRE": {
+    "type": "source",
+    "origin": "source",
+    "data_type": "str",
+    "source": "600.sire",
+    "display_name": "父",
+    "description": "略称: SIRE（任意の入力もしくは、分娩に紐づけられた導入イベントの際に、自動入力（受胎のSIRE））",
+    "editable": true,
+    "category": "CORE"
+  },
+  "AGE": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "age(cow.get('bthd'))",
+    "display_name": "月齢",
+    "description": "略称: AGE（月齢）",
+    "category": "CORE"
+  },
   "DIM": {
     "type": "calc",
     "origin": "calc",
     "data_type": "int",
     "formula": "dim(cow.get('clvd'))",
     "display_name": "分娩後日数",
+    "description": "分娩月日から本日までの日数",
     "category": "CORE"
   },
-  "DPAI": {
+  "DAI": {
     "type": "calc",
     "origin": "calc",
     "data_type": "int",
-    "formula": "dpai(events)",
-    "display_name": "最終AI後日数",
-    "category": "BREEDING"
+    "formula": "days_after_insemination(events)",
+    "display_name": "授精後日数",
+    "description": "略称: Days After Insemination（AIイベントから本日までの日数、ETイベントであれば7日差し引いたうえで計算）",
+    "category": "REPRODUCTION"
+  },
+  "LASTAI": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_ai_date(events)",
+    "display_name": "最終AI日",
+    "description": "略称: Last AI Date（最終AIイベントの日付）",
+    "category": "REPRODUCTION"
   },
   "DUE": {
     "type": "calc",
@@ -21,7 +124,8 @@
     "data_type": "str",
     "formula": "due_date(events, cow.get('clvd'))",
     "display_name": "分娩予定日",
-    "category": "BREEDING"
+    "description": "略称: DUE date（分娩予定日）",
+    "category": "REPRODUCTION"
   },
   "BRED": {
     "type": "calc",
@@ -29,7 +133,746 @@
     "data_type": "int",
     "formula": "breeding_count(events)",
     "display_name": "授精回数",
+    "description": "略称: BREeDing count（授精回数）",
     "editable": true,
-    "category": "BREEDING"
+    "category": "REPRODUCTION"
+  },
+  "LSIR": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_sire(events)",
+    "display_name": "最終使用SIRE",
+    "description": "略称: Last SIRE（最終使用SIRE）",
+    "category": "REPRODUCTION"
+  },
+  "DOPN": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "dopn(events, cow.get('clvd'))",
+    "display_name": "空胎日数",
+    "description": "略称: Days Open（空胎日数）。経産牛（lact > 0）かつ妊娠している牛（RC = 5）のみを対象とし、それ以外の牛はNoneとする。分娩日から受胎日までの日数を計算する。",
+    "category": "REPRODUCTION"
+  },
+  "DIMFAI": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "dimfai(events, cow)",
+    "display_name": "初回授精日数",
+    "description": "略称: DIM First AI（初回授精日数）",
+    "category": "REPRODUCTION"
+  },
+  "AGEFAI": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "agefai(events, cow)",
+    "display_name": "未経産初回授精月齢",
+    "description": "略称: AGE First AI（未経産初回授精月齢）",
+    "category": "REPRODUCTION"
+  },
+  "MILK": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'milk_yield')",
+    "display_name": "乳量",
+    "description": "略称: MILK（乳量）",
+    "category": "DHI"
+  },
+  "MFAT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'fat')",
+    "display_name": "乳脂率",
+    "description": "略称: Milk FAT（乳脂率）",
+    "category": "DHI"
+  },
+  "MPROT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'protein')",
+    "display_name": "乳蛋白率",
+    "description": "略称: Milk PROTein（乳蛋白率）",
+    "category": "DHI"
+  },
+  "PMILK": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "previous_milk_test_value(events, cow, 'milk_yield')",
+    "display_name": "前回の乳量",
+    "description": "略称: Previous MILK（前回の乳量）",
+    "category": "DHI"
+  },
+  "MUN": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'mun')",
+    "display_name": "MUN",
+    "description": "略称: Milk Urea Nitrogen（MUN）",
+    "category": "DHI"
+  },
+  "SCC": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "last_milk_test_value(events, cow, 'scc')",
+    "display_name": "SCC",
+    "description": "略称: Somatic Cell Count（体細胞数）",
+    "category": "DHI"
+  },
+  "LS": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'ls')",
+    "display_name": "リニアスコア",
+    "description": "略称: Linear Score（リニアスコア）",
+    "category": "DHI"
+  },
+  "PSCC": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "previous_milk_test_value(events, cow, 'scc')",
+    "display_name": "前回のSCC",
+    "description": "略称: Previous SCC（前回のSCC）",
+    "category": "DHI"
+  },
+  "PLS": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "previous_milk_test_value(events, cow, 'ls')",
+    "display_name": "前回のリニアスコア",
+    "description": "略称: Previous Linear Score（前回のリニアスコア）",
+    "category": "DHI"
+  },
+  "BHB": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'bhb')",
+    "display_name": "BHB",
+    "description": "略称: Beta-HydroxyButyrate（BHB）",
+    "category": "DHI"
+  },
+  "1STBHB": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "nth_milk_test_value(events, cow, 'bhb', 1)",
+    "display_name": "乳検１回目のBHB",
+    "description": "略称: 1ST BHB（1回目のBHB）",
+    "category": "DHI"
+  },
+  "2NDBHB": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "nth_milk_test_value(events, cow, 'bhb', 2)",
+    "display_name": "乳検２回目のBHB",
+    "description": "略称: 2ND BHB（2回目のBHB）",
+    "category": "DHI"
+  },
+  "3RDBHB": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "nth_milk_test_value(events, cow, 'bhb', 3)",
+    "display_name": "乳検３回目のBHB",
+    "description": "略称: 3RD BHB（3回目のBHB）",
+    "category": "DHI"
+  },
+  "DENFA": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'denovo_fa')",
+    "display_name": "デノボFA",
+    "description": "略称: DENovo FA（デノボFA）",
+    "category": "DHI"
+  },
+  "MIXFA": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'mixed_fa')",
+    "display_name": "ミックスFA",
+    "description": "略称: MIXed FA（ミックスFA）",
+    "category": "DHI"
+  },
+  "PRFA": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_milk_test_value(events, cow, 'preformed_fa')",
+    "display_name": "プレフォームFA",
+    "description": "略称: PReformed FA（プレフォームFA）",
+    "category": "DHI"
+  },
+  "TDATE": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_milk_test_date(events, cow)",
+    "display_name": "直近乳検日",
+    "description": "略称: Test DATE（直近乳検日）",
+    "category": "DHI"
+  },
+  "TDIM": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "last_milk_test_dim(events, cow)",
+    "display_name": "直近乳検日DIM",
+    "description": "略称: Test DIM（直近の乳検日のDIM）",
+    "category": "DHI"
+  },
+  "DRYLS": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "linear_score_before_dry(events, cow)",
+    "display_name": "乾乳前リニアスコア",
+    "description": "略称: DRY Linear Score（乾乳イベントの直前の乳検イベントのリニアスコア）",
+    "category": "DHI"
+  },
+  "DRYTD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "milk_test_date_before_dry(events, cow)",
+    "display_name": "乾乳前乳検日",
+    "description": "略称: DRY Test Date（乾乳イベントの直前の乳検イベントの日付）",
+    "category": "DHI"
+  },
+  "1STFAT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "nth_milk_test_value(events, cow, 'fat', 1)",
+    "display_name": "乳検１回目の乳脂率",
+    "description": "略称: 1ST FAT（1回目の乳脂率）",
+    "category": "DHI"
+  },
+  "1STMIL": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "nth_milk_test_value(events, cow, 'milk_yield', 1)",
+    "display_name": "乳検１回目の乳量",
+    "description": "略称: 1ST MILK（1回目の乳量）",
+    "category": "DHI"
+  },
+  "2NDMIL": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "nth_milk_test_value(events, cow, 'milk_yield', 2)",
+    "display_name": "乳検２回目の乳量",
+    "description": "略称: 2ND MILK（2回目の乳量）",
+    "category": "DHI"
+  },
+  "3RDMIL": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "nth_milk_test_value(events, cow, 'milk_yield', 3)",
+    "display_name": "乳検３回目の乳量",
+    "description": "略称: 3RD MILK（3回目の乳量）",
+    "category": "DHI"
+  },
+  "MAXMIL": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "max_milk_yield(events, cow)",
+    "display_name": "最高乳量",
+    "description": "略称: MAX MILK（最高乳量）\nその産次の乳検の乳量において、もっとも高い乳量",
+    "category": "DHI"
+  },
+  "MAXDIM": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "max_milk_yield_dim(events, cow)",
+    "display_name": "最高乳量時DIM",
+    "description": "略称: MAXDIM（最高乳量時DIM）\n乳検イベントで最高乳量を記録した時点でのDIM",
+    "category": "DHI"
+  },
+  "1STTDI": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "nth_milk_test_dim(events, cow, 1)",
+    "display_name": "乳検１回目のDIM",
+    "description": "略称: 1STTDI（1ST Test DIM）\nその産次の1回目の乳検のDIM",
+    "category": "DHI"
+  },
+  "2NDTDI": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "nth_milk_test_dim(events, cow, 2)",
+    "display_name": "乳検２回目のDIM",
+    "description": "略称: 2NDTDI（2ND Test DIM）\nその産次の2回目の乳検のDIM",
+    "category": "DHI"
+  },
+  "ESTR": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "next_estrus_date(events, cow)",
+    "display_name": "次回発情予定日",
+    "description": "略称: ESTRus（次回発情予定日）。繁殖コードがBred（授精後）の牛のみ表示、それ以外はNone",
+    "category": "REPRODUCTION"
+  },
+  "AGECLV": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "age_at_calving(cow.get('bthd'), cow.get('clvd'))",
+    "display_name": "分娩時の月齢",
+    "description": "略称: AGE at CalVing（分娩時の月齢）",
+    "category": "REPRODUCTION"
+  },
+  "AGEFCL": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "age_at_first_calving(events, cow)",
+    "display_name": "初産分娩時月齢",
+    "description": "略称: AGE at First CalVing（初産分娩時月齢）",
+    "category": "REPRODUCTION"
+  },
+  "LSIT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_insemination_type(events)",
+    "display_name": "最終AIの授精種類",
+    "description": "略称: Last Insemination Type（最終AIの授精種類）",
+    "category": "REPRODUCTION"
+  },
+  "CALF1": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "calf_info_by_lact(events, cow, 1)",
+    "display_name": "子牛（今産次）",
+    "description": "略称: CALF 1（今産次の子牛情報）",
+    "category": "REPRODUCTION"
+  },
+  "CALF2": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "calf_info_by_lact(events, cow, 2)",
+    "display_name": "子牛（前産次）",
+    "description": "略称: CALF 2（前産次の子牛情報）",
+    "category": "REPRODUCTION"
+  },
+  "CALF3": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "calf_info_by_lact(events, cow, 3)",
+    "display_name": "子牛（前々産次）",
+    "description": "略称: CALF 3（前々産次の子牛情報）",
+    "category": "REPRODUCTION"
+  },
+  "PCLVD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "previous_calving_date(events, cow, 2)",
+    "display_name": "前産次の分娩月日",
+    "description": "略称: Previous Calving Date",
+    "category": "REPRODUCTION"
+  },
+  "CINT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "calving_interval(events, cow)",
+    "display_name": "分娩間隔",
+    "description": "略称: Calving Interval",
+    "category": "REPRODUCTION"
+  },
+  "PCI": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "predicted_calving_interval(events, cow)",
+    "display_name": "予定分娩間隔",
+    "description": "略称: Predicted Calving Interval（今産次の分娩月日と予定分娩月日の間隔日数）",
+    "category": "REPRODUCTION"
+  },
+  "DCC": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "days_from_conception(events, cow)",
+    "display_name": "受胎日数",
+    "description": "略称: Days from Conception（受胎日から本日までの日数）",
+    "category": "REPRODUCTION"
+  },
+  "CONCDT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "conception_date(events, cow)",
+    "display_name": "受胎日",
+    "description": "略称: CONCeption DaTe（受胎日）。受胎のAI日もしくはET日マイナス7日。AI/ETイベント後、初めての妊娠イベント（PDP/PDP2/PAGP）で受胎日が確定される。ETの場合はAI/ETイベント日から7日前、AIの場合はAIイベント日が受胎日となる。",
+    "category": "REPRODUCTION"
+  },
+  "DRYD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "dry_date(events, cow)",
+    "display_name": "乾乳日",
+    "description": "略称: Dry Date（乾乳イベントの月日（今産次））",
+    "category": "REPRODUCTION"
+  },
+  "PDRYD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "previous_dry_date(events, cow)",
+    "display_name": "前産次の乾乳月日",
+    "description": "略称: Previous Dry Date（前産次の乾乳イベントの月日）",
+    "category": "REPRODUCTION"
+  },
+  "DPDC": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "days_from_previous_dry_to_calving(events, cow)",
+    "display_name": "乾乳日数",
+    "description": "略称: Days from Previous Dry to Calving（前産次の乾乳月日と今産次の分娩月日との差（日数））",
+    "category": "REPRODUCTION"
+  },
+  "STOPR": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "stopr_date(events)",
+    "display_name": "繁殖停止日",
+    "description": "略称: STOP Reproduction（繁殖停止イベント（STOPR）の日付）",
+    "category": "REPRODUCTION"
+  },
+  "STOPRD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "stopr_dim(events, cow)",
+    "display_name": "繁殖停止DIM",
+    "description": "略称: STOP Reproduction DIM（STOPRイベント時のDIM）",
+    "category": "REPRODUCTION"
+  },
+  "LREPRO": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_reproduction_check_date(events)",
+    "display_name": "検診日",
+    "description": "略称: Last REPROduction check（イベント300、301、302、303、304のうち最終日付）",
+    "category": "REPRODUCTION"
+  },
+  "REPCT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_reproduction_check_note(events)",
+    "display_name": "検診内容",
+    "description": "略称: REProduction Check Text（最終検診日（イベント300～304）のNOTE内容）",
+    "category": "REPRODUCTION"
+  },
+  "BCS": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "last_bcs(events)",
+    "display_name": "直近のBCS",
+    "description": "略称: Body Condition Score（直近のBCSイベントの数値）",
+    "category": "PRODUCTION"
+  },
+  "PBCS": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "previous_bcs(events)",
+    "display_name": "ひとつ前のBCS",
+    "description": "略称: Previous BCS（直近のBCSイベントのひとつ前のBCSイベントの数値）",
+    "category": "PRODUCTION"
+  },
+  "FMASTD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "first_mastitis_dim(events, cow)",
+    "display_name": "初回乳房炎DIM",
+    "description": "略称: First MASTitis DIM（分娩後初回の乳房炎イベントのDIM）",
+    "category": "HEALTH"
+  },
+  "FMAST": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "first_mastitis_date(events, cow)",
+    "display_name": "初回乳房炎日",
+    "description": "略称: First MASTitis（初回の乳房炎イベントの日付）",
+    "category": "HEALTH"
+  },
+  "LMAST": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_mastitis_date(events)",
+    "display_name": "最終乳房炎",
+    "description": "略称: Last MASTitis（直近の乳房炎イベントの日付）",
+    "category": "HEALTH"
+  },
+  "LMASTD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "last_mastitis_dim(events, cow)",
+    "display_name": "最終乳房炎DIM",
+    "description": "略称: Last MASTitis DIM（直近の乳房炎のDIM）",
+    "category": "HEALTH"
+  },
+  "TWIN": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "twin_flag(events, cow)",
+    "display_name": "双子フラグ",
+    "description": "略称: TWIN（妊娠イベントで双子とされた個体で「双子」と表示。妊娠していない個体は未受胎と表示、妊娠しているかつ双子とされていない場合は空欄）",
+    "category": "REPRODUCTION"
+  },
+  "CHKCD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "checkup_code(events, cow)",
+    "display_name": "検診コード",
+    "description": "略称: CHKCD（繁殖検診で抽出された個体の検診コード。フレッシュ、繁殖1、繁殖2、妊鑑、再妊、妊鑑2、分娩？、チェック、育繁1、育繁2、育妊、育再妊など）",
+    "category": "REPRODUCTION"
+  },
+  "TAG": {
+    "type": "custom",
+    "origin": "custom",
+    "data_type": "str",
+    "display_name": "タグ",
+    "description": "略称: TAG（ユーザーが任意で入力可能な番号・識別子）",
+    "editable": true,
+    "category": "CORE"
+  },
+  "CALVMO": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "calving_month(cow)",
+    "display_name": "分娩月",
+    "description": "今産次の分娩月（1-12）",
+    "category": "REPRODUCTION"
+  },
+  "PCALVM": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "previous_calving_month(events, cow)",
+    "display_name": "前産分娩月",
+    "description": "前産次の分娩月（1-12）",
+    "category": "REPRODUCTION"
+  },
+  "CLVDYM": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "calving_year_month(cow.get('clvd'))",
+    "display_name": "分娩年月",
+    "description": "略称: CLVDYM（Calving Year Month）\n分娩年月日の年月（日を除く、YYYY-MM形式）",
+    "category": "REPRODUCTION"
+  },
+  "FSTAI": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "first_ai_date(events, cow)",
+    "display_name": "初回授精日",
+    "description": "略称: FSTAI（First AI）\nその産次の初回授精の日付",
+    "category": "REPRODUCTION"
+  },
+  "1STTD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "nth_milk_test_date(events, cow, 1)",
+    "display_name": "乳検１回目日",
+    "description": "略称: 1STTD（1ST Test Date）\nその産次の1回目の乳検日付",
+    "category": "DHI"
+  },
+  "2NDTD": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "nth_milk_test_date(events, cow, 2)",
+    "display_name": "乳検２回目日",
+    "description": "略称: 2NDTD（2ND Test Date）\nその産次の2回目の乳検日付",
+    "category": "DHI"
+  },
+  "AIINT": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "ai_interval(events)",
+    "display_name": "授精間隔",
+    "description": "略称: AIINT（AI Interval）\n直近AIイベントとその前のAIイベントの間隔（日数）。ETイベントでは7日引いたうえで計算する。授精回数が1回もしくは0回の場合は存在しない。",
+    "category": "REPRODUCTION"
+  },
+  "LLAMEN": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "str",
+    "formula": "last_lame_note(events)",
+    "display_name": "直近LAME NOTE",
+    "description": "略称: LLAMEN（Last LAME Note）\n直近のLAMEイベントのNOTE（蹄病種類などを記載）",
+    "category": "HEALTH"
+  },
+  "MILK1M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_1(events, cow, 'milk_yield')",
+    "display_name": "任意月の乳検乳量１",
+    "description": "略称: MILK 1 Month（任意月の乳検乳量１）\nアプリ設定で指定した月1の直近の乳検乳量",
+    "category": "DHI"
+  },
+  "MILK2M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_2(events, cow, 'milk_yield')",
+    "display_name": "任意月の乳検乳量２",
+    "description": "略称: MILK 2 Month（任意月の乳検乳量２）\nアプリ設定で指定した月2の直近の乳検乳量",
+    "category": "DHI"
+  },
+  "SCC1M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "milk_test_value_by_month_1(events, cow, 'scc')",
+    "display_name": "任意月の乳検体細胞１",
+    "description": "略称: SCC 1 Month（任意月の乳検体細胞１）\nアプリ設定で指定した月1の直近の乳検体細胞数",
+    "category": "DHI"
+  },
+  "SCC2M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "int",
+    "formula": "milk_test_value_by_month_2(events, cow, 'scc')",
+    "display_name": "任意月の乳検体細胞２",
+    "description": "略称: SCC 2 Month（任意月の乳検体細胞２）\nアプリ設定で指定した月2の直近の乳検体細胞数",
+    "category": "DHI"
+  },
+  "LS1M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_1(events, cow, 'ls')",
+    "display_name": "任意月の乳検リニアスコア１",
+    "description": "略称: LS 1 Month（任意月の乳検リニアスコア１）\nアプリ設定で指定した月1の直近の乳検リニアスコア",
+    "category": "DHI"
+  },
+  "LS2M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_2(events, cow, 'ls')",
+    "display_name": "任意月の乳検リニアスコア２",
+    "description": "略称: LS 2 Month（任意月の乳検リニアスコア２）\nアプリ設定で指定した月2の直近の乳検リニアスコア",
+    "category": "DHI"
+  },
+  "MUN1M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_1(events, cow, 'mun')",
+    "display_name": "任意月の乳検MUN１",
+    "description": "略称: MUN 1 Month（任意月の乳検MUN１）\nアプリ設定で指定した月1の直近の乳検MUN",
+    "category": "DHI"
+  },
+  "MUN2M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_2(events, cow, 'mun')",
+    "display_name": "任意月の乳検MUN２",
+    "description": "略称: MUN 2 Month（任意月の乳検MUN２）\nアプリ設定で指定した月2の直近の乳検MUN",
+    "category": "DHI"
+  },
+  "PROT1M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_1(events, cow, 'protein')",
+    "display_name": "任意月の乳検乳蛋白１",
+    "description": "略称: PROTein 1 Month（任意月の乳検乳蛋白１）\nアプリ設定で指定した月1の直近の乳検乳蛋白率",
+    "category": "DHI"
+  },
+  "PROT2M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_2(events, cow, 'protein')",
+    "display_name": "任意月の乳検乳蛋白２",
+    "description": "略称: PROTein 2 Month（任意月の乳検乳蛋白２）\nアプリ設定で指定した月2の直近の乳検乳蛋白率",
+    "category": "DHI"
+  },
+  "FAT1M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_1(events, cow, 'fat')",
+    "display_name": "任意月の乳検乳脂肪１",
+    "description": "略称: FAT 1 Month（任意月の乳検乳脂肪１）\nアプリ設定で指定した月1の直近の乳検乳脂率",
+    "category": "DHI"
+  },
+  "FAT2M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_2(events, cow, 'fat')",
+    "display_name": "任意月の乳検乳脂肪２",
+    "description": "略称: FAT 2 Month（任意月の乳検乳脂肪２）\nアプリ設定で指定した月2の直近の乳検乳脂率",
+    "category": "DHI"
+  },
+  "DENFA1M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_1(events, cow, 'denovo_fa')",
+    "display_name": "任意月の乳検デノボFA１",
+    "description": "略称: DENFA 1 Month（任意月の乳検デノボFA１）\nアプリ設定で指定した月1の直近の乳検デノボFA",
+    "category": "DHI"
+  },
+  "DENFA2M": {
+    "type": "calc",
+    "origin": "calc",
+    "data_type": "float",
+    "formula": "milk_test_value_by_month_2(events, cow, 'denovo_fa')",
+    "display_name": "任意月の乳検デノボFA２",
+    "description": "略称: DENFA 2 Month（任意月の乳検デノボFA２）\nアプリ設定で指定した月2の直近の乳検デノボFA",
+    "category": "DHI"
   }
 }

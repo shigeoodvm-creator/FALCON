@@ -21,6 +21,7 @@ except ImportError:
 from modules.execution_plan import AnalysisType, GraphType
 from modules.query_router_v2 import QueryRouterV2
 from modules.executor_v2 import ExecutorV2
+from modules.activity_log import load_entries
 
 logger = logging.getLogger(__name__)
 
@@ -87,18 +88,19 @@ class AnalysisUI:
         self._create_widgets()
     
     def _load_dictionaries(self):
-        """辞書を読み込む"""
+        """辞書を読み込む（本体 config_default を参照）"""
+        app_root = Path(__file__).parent.parent.parent
+        config_default = app_root / "config_default"
         # item_dictionary.json
-        item_dict_path = self.farm_path / "item_dictionary.json"
+        item_dict_path = config_default / "item_dictionary.json"
         if item_dict_path.exists():
             try:
                 with open(item_dict_path, 'r', encoding='utf-8') as f:
                     self.item_dictionary = json.load(f)
             except Exception as e:
                 logger.error(f"item_dictionary.json読み込みエラー: {e}")
-        
         # event_dictionary.json
-        event_dict_path = self.farm_path / "event_dictionary.json"
+        event_dict_path = config_default / "event_dictionary.json"
         if event_dict_path.exists():
             try:
                 with open(event_dict_path, 'r', encoding='utf-8') as f:
@@ -197,7 +199,7 @@ class AnalysisUI:
             text_container,
             highlightthickness=0,
             bg=text_bg,
-            cursor="text",  # Textウィジェットと同じカーソル
+            cursor="xterm",  # Textウィジェットと同じカーソル（Iビーム）
             takefocus=False  # フォーカスを受け取らない
         )
         # CanvasをTextウィジェットの上に配置（placeで重ねる）
@@ -823,6 +825,13 @@ class AnalysisUI:
         self.result_notebook.add(event_list_frame, text="イベント一覧")
         self._create_event_list_view(event_list_frame)
         
+        # 操作ログ（イベント登録・更新・削除の履歴）
+        activity_log_frame = ttk.Frame(self.result_notebook)
+        self.result_notebook.add(activity_log_frame, text="操作ログ")
+        self._create_activity_log_view(activity_log_frame)
+        
+        self.result_notebook.bind("<<NotebookTabChanged>>", self._on_result_notebook_tab_changed)
+        
         # エラー/警告表示（結果表示エリアの下部）
         error_frame = ttk.Frame(result_label_frame)
         error_frame.pack(fill=tk.X, pady=(5, 0))
@@ -1036,11 +1045,12 @@ class AnalysisUI:
                 display_name = self._get_item_display_name(col)
                 column_display_names.append(display_name)
             
-            # 列を設定
+            # 列を設定（日付列は幅を広め、数値列は右揃え）
             self.result_tree["columns"] = columns
             for col, display_name in zip(columns, column_display_names):
                 self.result_tree.heading(col, text=display_name)
-                self.result_tree.column(col, width=120)
+                width, anchor = self._get_column_width_and_anchor(col)
+                self.result_tree.column(col, width=width, anchor=anchor)
             
             # データを挿入
             for row in rows:
@@ -1068,6 +1078,35 @@ class AnalysisUI:
             if isinstance(item_def, dict):
                 return item_def.get("display_name", item_key)
         return item_key
+    
+    def _get_column_width_and_anchor(self, item_key: str) -> tuple:
+        """
+        列幅とアンカー（揃え）を取得
+        
+        - 日付列: 幅180（YYYY-MM-DD表示が切れないように十分な幅）
+        - 数値列（int/float）: 右揃え（anchor='e'）
+        - その他: 幅140、左揃え
+        """
+        date_like_keys = {'CLVD', 'BTHD', 'PCLVD', 'LASTAI', 'DUE', 'FCHKDATE', 'LREPRO',
+                         'TDATE', '1STTD', '2NDTD', 'DRYTD', 'LMAST', 'LLAME',
+                         'ENTR', 'CONCDT', 'DRYD', 'PDRYD', 'STOPR', 'DUEM60', 'DUEM30',
+                         'DUEM21', 'DUEM14', 'DUEM7', 'NEXTESTR', 'FIRSTAI', '1STTDATE', '2NDTDATE'}
+        numeric_like_keys = {'COW_ID', 'JPN10'}  # 数値表示されるID系
+        width = 140
+        anchor = 'w'  # 左揃え（デフォルト）
+        if item_key in self.item_dictionary:
+            item_def = self.item_dictionary[item_key]
+            if isinstance(item_def, dict):
+                data_type = item_def.get("data_type", "str")
+                if item_key in date_like_keys:
+                    width = 180  # 日付列は幅を十分に広め（YYYY-MM-DDが切れないように）
+                elif data_type in ('int', 'float', 'integer', 'decimal') or item_key in numeric_like_keys:
+                    anchor = 'e'  # 数値は右揃え
+        elif item_key in date_like_keys:
+            width = 180
+        elif item_key in numeric_like_keys:
+            anchor = 'e'
+        return (width, anchor)
     
     def _display_graph(self, data: Dict[str, Any]):
         """グラフを表示"""
@@ -1155,4 +1194,88 @@ class AnalysisUI:
         if MATPLOTLIB_AVAILABLE and hasattr(self, 'graph_canvas') and self.graph_canvas:
             self.graph_figure.clear()
             self.graph_canvas.draw()
+    
+    def _create_activity_log_view(self, parent: tk.Widget):
+        """操作ログタブ（ローカルに蓄積したイベント操作履歴）"""
+        top = ttk.Frame(parent)
+        top.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(
+            top,
+            text="直近のイベント登録・更新・削除（このPCの記録）。分析実行とは独立しています。",
+            font=("Meiryo UI", 9),
+            foreground="#546e7a",
+        ).pack(side=tk.LEFT)
+        ttk.Button(top, text="更新", command=self._refresh_activity_log_view, width=8).pack(side=tk.RIGHT)
+        
+        tree_frame = ttk.Frame(parent)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        
+        columns = ("ts", "farm", "action", "cow_id", "cow_auto_id", "event", "event_date", "event_id")
+        self.activity_log_tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="headings",
+            height=18,
+        )
+        self.activity_log_tree.heading("ts", text="日時")
+        self.activity_log_tree.heading("farm", text="農場")
+        self.activity_log_tree.heading("action", text="種別")
+        self.activity_log_tree.heading("cow_id", text="個体ID")
+        self.activity_log_tree.heading("cow_auto_id", text="auto_id")
+        self.activity_log_tree.heading("event", text="イベント")
+        self.activity_log_tree.heading("event_date", text="イベント日")
+        self.activity_log_tree.heading("event_id", text="event_id")
+        
+        self.activity_log_tree.column("ts", width=150, anchor="w")
+        self.activity_log_tree.column("farm", width=90, anchor="w")
+        self.activity_log_tree.column("action", width=48, anchor="center")
+        self.activity_log_tree.column("cow_id", width=64, anchor="w")
+        self.activity_log_tree.column("cow_auto_id", width=56, anchor="e")
+        self.activity_log_tree.column("event", width=160, anchor="w")
+        self.activity_log_tree.column("event_date", width=88, anchor="w")
+        self.activity_log_tree.column("event_id", width=64, anchor="e")
+        
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.activity_log_tree.yview)
+        hsb = ttk.Scrollbar(parent, orient=tk.HORIZONTAL, command=self.activity_log_tree.xview)
+        self.activity_log_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.activity_log_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(fill=tk.X)
+        
+        self._refresh_activity_log_view()
+    
+    def _refresh_activity_log_view(self):
+        """操作ログ Treeview を再読込"""
+        if not hasattr(self, "activity_log_tree"):
+            return
+        try:
+            for item in self.activity_log_tree.get_children():
+                self.activity_log_tree.delete(item)
+            for row in load_entries(limit=200):
+                ts = str(row.get("ts") or "")
+                farm = str(row.get("farm") or "")
+                action = str(row.get("action") or "")
+                cow_id = str(row.get("cow_id") or "")
+                ca = row.get("cow_auto_id")
+                cow_auto = "" if ca is None else str(ca)
+                ev = str(row.get("event") or "")
+                ed = str(row.get("event_date") or "")
+                eid = row.get("event_id")
+                eid_s = "" if eid is None else str(eid)
+                self.activity_log_tree.insert(
+                    "",
+                    tk.END,
+                    values=(ts, farm, action, cow_id, cow_auto, ev, ed, eid_s),
+                )
+        except Exception as e:
+            logger.error("操作ログ表示エラー: %s", e, exc_info=True)
+    
+    def _on_result_notebook_tab_changed(self, event=None):
+        """操作ログタブ選択時に最新化"""
+        try:
+            idx = self.result_notebook.index(self.result_notebook.select())
+            if idx == 3:
+                self._refresh_activity_log_view()
+        except Exception:
+            pass
 

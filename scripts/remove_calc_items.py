@@ -1,6 +1,6 @@
 """
 計算項目削除スクリプト
-origin="calc" かつ item_key NOT IN ("DIM", "DPAI", "DUE") の項目を削除
+origin="calc" かつ item_key NOT IN ("DIM", "DAI", "DUE") の項目を削除
 """
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 # 削除対象外（残す項目）
-KEEP_ITEMS = {"DIM", "DPAI", "DUE"}
+KEEP_ITEMS = {"DIM", "DAI", "DUE"}
 
 
 def should_delete_item(item_key: str, item_data: Dict[str, Any]) -> bool:
@@ -107,11 +107,11 @@ def remove_from_db(db_path: Path) -> int:
             return 0
         
         # 削除対象を特定して削除
-        # origin='calc' かつ item_key NOT IN ('DIM', 'DPAI', 'DUE')
+        # origin='calc' かつ item_key NOT IN ('DIM', 'DAI', 'DUE')
         cursor.execute("""
             DELETE FROM item_dictionary
             WHERE origin = 'calc'
-              AND item_key NOT IN ('DIM', 'DPAI', 'DUE')
+              AND item_key NOT IN ('DIM', 'DAI', 'DUE')
         """)
         
         deleted_count = cursor.rowcount
@@ -188,4 +188,41 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

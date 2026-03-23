@@ -6,12 +6,14 @@ ExecutionPlanに従い、LIST/AGG/EVENTCOUNT/GRAPH/REPROを実行
 import logging
 from typing import Dict, Any, Optional, List
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from db.db_handler import DBHandler
 from modules.formula_engine import FormulaEngine
 from modules.rule_engine import RuleEngine
 from modules.execution_plan import ExecutionPlan, AnalysisType, GraphType, Condition, GroupBy
 from modules.query_router_v2 import QueryRouterV2
+from app.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ class ExecutorV2:
     
     def __init__(self, db_handler: DBHandler, formula_engine: FormulaEngine,
                  rule_engine: RuleEngine, item_dictionary_path: Optional[Path] = None,
-                 event_dictionary_path: Optional[Path] = None):
+                 event_dictionary_path: Optional[Path] = None, farm_path: Optional[Path] = None):
         """
         初期化
         
@@ -40,15 +42,27 @@ class ExecutorV2:
             rule_engine: RuleEngine インスタンス
             item_dictionary_path: item_dictionary.json のパス
             event_dictionary_path: event_dictionary.json のパス
+            farm_path: 農場フォルダパス（VWP取得用）
         """
         self.db = db_handler
         self.formula_engine = formula_engine
         self.rule_engine = rule_engine
         self.item_dictionary_path = item_dictionary_path
         self.event_dictionary_path = event_dictionary_path
+        self.farm_path = farm_path
         
         # QueryRouterV2のイベントグルーピングを参照
         self.event_groups = QueryRouterV2.EVENT_GROUPS
+        
+        # SettingsManager（VWP取得用）
+        self.settings_manager = None
+        self.DEFAULT_VWP = 50  # デフォルトVWP（日数）
+        if farm_path:
+            try:
+                self.settings_manager = SettingsManager(farm_path)
+                self.settings_manager.load()
+            except Exception as e:
+                logger.warning(f"SettingsManager初期化エラー: {e}")
     
     def execute(self, plan: ExecutionPlan) -> Dict[str, Any]:
         """
@@ -276,14 +290,87 @@ class ExecutorV2:
         }
     
     def _execute_repro(self, plan: ExecutionPlan) -> Dict[str, Any]:
-        """繁殖分析実行"""
-        # 簡易実装：後で実装
-        return {
-            "success": False,
-            "data": None,
-            "errors": ["繁殖分析機能は未実装です"],
-            "warnings": plan.warnings
-        }
+        """繁殖分析実行（DC305互換）"""
+        try:
+            # VWPを取得（農場設定から、デフォルト50）
+            vwp = self.DEFAULT_VWP
+            if self.settings_manager:
+                try:
+                    settings = self.settings_manager.load()
+                    # 農場設定からVWPを取得（将来的に実装予定の「農場繁殖指標設定」から取得）
+                    # 現時点ではデフォルト値を使用
+                    vwp = settings.get('reproduction', {}).get('vwp', self.DEFAULT_VWP)
+                except Exception as e:
+                    logger.warning(f"VWP取得エラー: {e}、デフォルト値({self.DEFAULT_VWP})を使用")
+            
+            # 繁殖分析を実行
+            repro_analysis = ReproductionAnalysis(
+                db=self.db,
+                rule_engine=self.rule_engine,
+                formula_engine=self.formula_engine,
+                vwp=vwp
+            )
+            
+            results = repro_analysis.analyze(
+                period_start=plan.period_start,
+                period_end=plan.period_end
+            )
+            
+            # DC305互換のテーブル形式に変換
+            rows = []
+            total_br_el = 0
+            total_bred = 0
+            total_preg = 0
+            
+            for result in results:
+                rows.append({
+                    "cycle": f"Cycle {result.cycle_number}",
+                    "start_date": result.start_date,
+                    "end_date": result.end_date,
+                    "br_el": result.br_el,
+                    "bred": result.bred,
+                    "preg": result.preg,
+                    "hdr": result.hdr,
+                    "pr": result.pr
+                })
+                total_br_el += result.br_el
+                total_bred += result.bred
+                total_preg += result.preg
+            
+            # Total/Average行を追加
+            avg_hdr = (total_bred / total_br_el * 100) if total_br_el > 0 else 0.0
+            avg_pr = (total_preg / total_br_el * 100) if total_br_el > 0 else 0.0
+            
+            rows.append({
+                "cycle": "Total/Average",
+                "start_date": "",
+                "end_date": "",
+                "br_el": total_br_el,
+                "bred": total_bred,
+                "preg": total_preg,
+                "hdr": round(avg_hdr, 2),
+                "pr": round(avg_pr, 2)
+            })
+            
+            return {
+                "success": True,
+                "data": {
+                    "type": "table",
+                    "columns": ["cycle", "start_date", "end_date", "br_el", "bred", "preg", "hdr", "pr"],
+                    "rows": rows
+                },
+                "errors": [],
+                "warnings": plan.warnings
+            }
+        
+        except Exception as e:
+            logger.error(f"繁殖分析実行エラー: {e}", exc_info=True)
+            return {
+                "success": False,
+                "data": None,
+                "errors": [f"繁殖分析実行エラー: {str(e)}"],
+                "warnings": plan.warnings
+            }
     
     def _filter_cows(self, cows: List[Dict[str, Any]], conditions: List[Condition]) -> List[Dict[str, Any]]:
         """条件で牛をフィルタリング"""

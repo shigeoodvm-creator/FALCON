@@ -32,8 +32,6 @@ class ItemNewWindow:
         self.window = tk.Toplevel(parent)
         self.window.title("新規項目を追加")
         self.window.geometry("640x560")
-        self.window.transient(parent)
-        self.window.grab_set()
 
         self._create_widgets()
 
@@ -123,6 +121,11 @@ class ItemNewWindow:
         if not key or not self.KEY_PATTERN.match(key):
             messagebox.showerror("エラー", "項目キーは英大文字・数字・アンダースコアのみ使用できます。")
             return
+        
+        # 項目キーが6文字以下であることを確認
+        if len(key) > 6:
+            messagebox.showerror("エラー", f"項目キーは最大6文字までです。現在の長さ: {len(key)}文字")
+            return
         if not label:
             messagebox.showerror("エラー", "表示名を入力してください")
             return
@@ -157,6 +160,9 @@ class ItemNewWindow:
         item_dict[key] = new_entry
 
         try:
+            # フォルダが存在しない場合は作成
+            if self.item_dictionary_path:
+                self.item_dictionary_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.item_dictionary_path, "w", encoding="utf-8") as f:
                 json.dump(item_dict, f, ensure_ascii=False, indent=2)
             logger.info(f"item_dictionary added: {key}")
@@ -169,5 +175,31 @@ class ItemNewWindow:
 
     def show(self):
         self.window.wait_window()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

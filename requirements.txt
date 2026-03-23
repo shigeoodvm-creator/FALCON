@@ -1,0 +1,12 @@
+# 生存曲線の Log-rank 検定（P値表示）に必要
+lifelines>=0.30.0
+
+# グラフ描画
+matplotlib>=3.7.0
+numpy>=1.24.0
+
+# データ処理（分析レポート等）
+pandas>=2.0.0
+
+# OpenAI API クライアント
+openai>=1.0.0

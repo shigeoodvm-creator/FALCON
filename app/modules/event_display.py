@@ -67,83 +67,241 @@ def _get_name(mapping: Dict[Union[str, int], Any], code: Any) -> Optional[str]:
     return _resolve_display_name(val)
 
 
+def _get_display_width(text: str) -> int:
+    """
+    表示幅を計算（全角文字=2、半角文字=1としてカウント）
+    
+    Args:
+        text: テキスト
+    
+    Returns:
+        表示幅（全角換算）
+    """
+    width = 0
+    for char in text:
+        # 全角文字（日本語、全角記号など）は2、半角文字は1
+        if ord(char) > 0x7F or char in '　':
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def _pad_right(text: str, width: int) -> str:
+    """
+    テキストを指定幅まで右側に全角スペースでパディング
+    
+    Args:
+        text: テキスト
+        width: 目標幅（全角換算）
+    
+    Returns:
+        パディングされたテキスト
+    """
+    current_width = _get_display_width(text)
+    if current_width >= width:
+        return text
+    # 不足分を全角スペースで埋める
+    padding = width - current_width
+    return text + "　" * (padding // 2) + " " * (padding % 2)
+
+
+def _pad_left(text: str, width: int) -> str:
+    """
+    テキストを指定幅まで左側に全角スペースでパディング
+    
+    Args:
+        text: テキスト
+        width: 目標幅（全角換算）
+    
+    Returns:
+        パディングされたテキスト
+    """
+    current_width = _get_display_width(text)
+    if current_width >= width:
+        return text
+    # 不足分を全角スペースで埋める
+    padding = width - current_width
+    return "　" * (padding // 2) + " " * (padding % 2) + text
+
+
 def format_insemination_event(
     json_data: Optional[Dict[str, Any]],
     technicians: Dict[Union[str, int], Any],
-    insemination_types: Dict[Union[str, int], Any]
+    insemination_types: Dict[Union[str, int], Any],
+    conception_status: Optional[str] = None,
+    cow_id: Optional[str] = None,
+    insemination_count: Optional[int] = None
 ) -> Optional[str]:
     """
-    AI/ETイベントの表示文字列を生成
+    AI/ETイベントの表示文字列を生成（整列表示）
     
-    表示形式: SIRE <2スペース> 授精師名 <2スペース> 授精種類名（固定幅フォーマット）
+    表示形式: 各フィールドを固定幅でパディングして整列
+    例: 3H61714　　　Yasuda　　　　3　CIDR P　　　　　P
+    
+    フィールド幅:
+    - SIRE: 12文字幅（左揃え）
+    - 授精師: 10文字幅（左揃え）
+    - カウント: 3文字幅（右揃え）
+    - 種類: 12文字幅（左揃え）
+    - 結果: 2文字幅（左揃え）
     
     Args:
         json_data: イベントの json_data (dict)
-        technicians: technician_code -> technician_name の辞書
-                     （例: {"1": "Sonoda"} または {"1": {"name": "Sonoda"}}）
-        insemination_types: insemination_type_code -> type_name の辞書
-                           （例: {"1": "自然発情"} または {"1": {"name": "自然発情"}}）
+        technicians: technician_code -> technician_name の辞書（授精師の表示に使用）
+        insemination_types: insemination_type_code -> type_name の辞書（授精種類の表示に使用）
+        conception_status: 受胎ステータス（P/R/O/R/N）、Noneの場合はjson_dataから取得
+        cow_id: 個体ID（使用しない、後方互換性のため残す）
+        insemination_count: 授精カウント（例: 1）
     
     Returns:
-        表示文字列（例: "6h5555  Sonoda      自然発情"）、
-        データがない場合は None
+        表示文字列（整列済み）、データがない場合は None
     """
     if not json_data:
         return None
     
-    # json_dataからキーを取得（複数のキー名に対応）
+    # 種雄牛名（SIRE）を取得
     sire = json_data.get("sire") or ""
+    
+    # 授精師を取得
     tech_code = json_data.get("technician_code") or json_data.get("technician")
+    tech_name = _get_name(technicians, tech_code) if tech_code else None
+    
+    # 授精カウントを取得（引数またはjson_dataから）
+    count = insemination_count
+    if count is None:
+        count = json_data.get("insemination_count")
+        if count is not None:
+            try:
+                count = int(count)
+            except (ValueError, TypeError):
+                count = None
+    
+    # 授精種類を取得
     type_code = json_data.get("insemination_type_code") or json_data.get("ai_type") or json_data.get("type")
+    type_name = _get_name(insemination_types, type_code) if type_code else None
     
-    # 名称を取得（辞書構造に依存しない実装）
-    tech_name = _get_name(technicians, tech_code) or ""
-    type_name = _get_name(insemination_types, type_code) or ""
+    # 受胎ステータスを取得（引数またはjson_dataから）
+    outcome = conception_status
+    if outcome is None:
+        outcome = json_data.get("outcome")
     
-    # 確認ログ（残す）
-    logging.info(
-        "AI display debug: sire=%s tech=%s type=%s tech_name=%s type_name=%s",
-        sire,
-        tech_code,
-        type_code,
-        tech_name,
-        type_name
-    )
-    
-    # 固定幅フォーマットで表示
-    # SIRE <2スペース> 授精師 <2スペース> 授精種類
+    # 各フィールドを固定幅でパディング
     parts = []
     
+    # SIRE（種雄牛名）- 12文字幅、左揃え
     if sire:
-        # SIREは最大8文字分の幅を確保（右詰め）
-        parts.append(str(sire).ljust(8))
+        parts.append(_pad_right(str(sire), 12))
+    else:
+        parts.append("　" * 6)  # 12文字分の全角スペース
     
+    # 授精師 - 10文字幅、左揃え
     if tech_name:
-        # 授精師名は最大12文字分の幅を確保（右詰め）
-        parts.append(str(tech_name).ljust(12))
+        parts.append(_pad_right(str(tech_name), 10))
+    else:
+        parts.append("　" * 5)  # 10文字分の全角スペース
     
+    # 授精カウント - 3文字幅、右揃え
+    if count is not None:
+        parts.append(_pad_left(str(count), 3))
+    else:
+        parts.append("　" * 1 + " ")  # 3文字分のスペース
+    
+    # 授精種類 - 12文字幅、左揃え
     if type_name:
-        # 授精種類名は最後なので幅調整不要
-        parts.append(str(type_name))
+        parts.append(_pad_right(str(type_name), 12))
+    else:
+        parts.append("　" * 6)  # 12文字分の全角スペース
     
-    # 半角スペース2つで区切る
-    result = "  ".join(parts).strip()
+    # 結果（P/O/R/N）- 2文字幅、左揃え
+    if outcome:
+        parts.append(_pad_right(str(outcome), 2))
+    else:
+        parts.append("　")  # 2文字分の全角スペース
     
-    # NOTEの残り情報がある場合は後ろに続ける
-    # 既存のnoteやmemoがあれば追加（ただし、sire/technician/type以外の情報）
-    other_info = []
-    for key in json_data.keys():
-        if key not in ["sire", "technician_code", "technician", "insemination_type_code", "ai_type", "type"]:
-            value = json_data.get(key)
-            if value and str(value).strip() and str(value).strip() != "-":
-                # 既に表示済みの情報は除外
-                if str(value) not in [sire, tech_name, type_name, str(tech_code), str(type_code)]:
-                    other_info.append(f"{key}:{value}")
+    # 全角スペース1つで区切る（固定幅パディングにより整列される）
+    if parts:
+        result = "　".join(parts)
+        return result
     
-    if other_info:
-        result = f"{result}  {'  '.join(other_info)}"
+    return None
+
+
+def format_reproduction_check_event(
+    json_data: Optional[Dict[str, Any]]
+) -> Optional[str]:
+    """
+    繁殖検査/フレッシュチェック/妊娠鑑定マイナスイベントの表示文字列を生成
     
-    return result if result else None
+    処置＝農場設定＞繁殖処置設定で設定する項目（WPG, CIDR, GN, PG, E2 等）。
+    所見＝子宮・右・左・その他（子宮OK, NS 等は所見であり処置ではない）。
+    表示形式: 処置を固定幅6文字で左揃え、以降は所見を詰めて表示。
+    処置なしの場合は6文字分を空欄で開けて、所見のみ表示。
+    例: WPG　　右CL　左F
+    例: CIDR　　右CL
+    例: 　　　　 左CL（処置なし・所見のみ）
+    
+    Args:
+        json_data: イベントの json_data (dict)
+    
+    Returns:
+        表示文字列、データがない場合は None
+    """
+    if not json_data:
+        return None
+    
+    parts = []
+    
+    # 処置（新しいキー名と古いキー名の両方をサポート）- 固定幅6文字
+    treatment = json_data.get('treatment') or json_data.get('treatment_code', '')
+    if treatment and str(treatment).strip() and str(treatment).strip() != '-':
+        parts.append(_pad_right(str(treatment).strip(), 6))
+    else:
+        # 処置なしの場合は6文字分の全角スペースを追加（所見を表示するため）
+        parts.append("　" * 3)  # 6文字分の全角スペース
+    
+    # 以降は詰めて表示（空のフィールドは追加しない）
+    # 子宮所見（新しいキー名と古いキー名の両方をサポート）
+    uterine = (json_data.get('uterine_findings') or 
+              json_data.get('uterus_findings') or 
+              json_data.get('uterus_finding') or 
+              json_data.get('uterus', ''))
+    if uterine and str(uterine).strip() and str(uterine).strip() != '-':
+        parts.append(f"子宮{str(uterine).strip()}")
+    
+    # 左卵巣所見（新しいキー名と古いキー名の両方をサポート）
+    left_ovary = (json_data.get('left_ovary_findings') or 
+                 json_data.get('leftovary_findings') or 
+                 json_data.get('leftovary_finding') or 
+                 json_data.get('left_ovary', '') or
+                 json_data.get('leftovary', ''))
+    if left_ovary and str(left_ovary).strip() and str(left_ovary).strip() != '-':
+        parts.append(f"左{str(left_ovary).strip()}")
+    
+    # 右卵巣所見（新しいキー名と古いキー名の両方をサポート）
+    right_ovary = (json_data.get('right_ovary_findings') or 
+                  json_data.get('rightovary_findings') or 
+                  json_data.get('rightovary_finding') or 
+                  json_data.get('right_ovary', '') or
+                  json_data.get('rightovary', ''))
+    if right_ovary and str(right_ovary).strip() and str(right_ovary).strip() != '-':
+        parts.append(f"右{str(right_ovary).strip()}")
+    
+    # remark（新しいキー名と古いキー名の両方をサポート）
+    remark = json_data.get('remark')
+    if not remark:
+        remark = (json_data.get('other') or 
+                 json_data.get('other_info') or 
+                 json_data.get('other_findings', ''))
+    if remark and str(remark).strip() and str(remark).strip() != '-':
+        parts.append(str(remark).strip())
+    
+    # 全角スペース1つで区切る（処置は固定幅、以降は詰めて表示）
+    if parts:
+        result = "　".join(parts)
+        return result
+    
+    return None
 
 
 def format_calving_event(
@@ -197,7 +355,15 @@ def format_calving_event(
     for calf in calves:
         breed = calf.get("breed") or ""
         sex = calf.get("sex")
-        sex_mark = "♀" if str(sex).upper() == "F" else ("♂" if sex else "")
+        su = str(sex).upper() if sex not in (None, "") else ""
+        if su == "F":
+            sex_mark = "♀"
+        elif su == "M":
+            sex_mark = "♂"
+        elif su in ("U", "?"):
+            sex_mark = "不明"
+        else:
+            sex_mark = ""
         stillborn = calf.get("stillborn", False)
         part = f"{breed}{sex_mark}".strip()
         if stillborn:
@@ -214,4 +380,106 @@ def format_calving_event(
         parts.append("・".join(calf_parts))
     
     return " / ".join(parts) if parts else None
+
+
+def build_ai_et_event_note(
+    event: Dict[str, Any],
+    technicians_dict: Dict[Union[str, int], Any],
+    insemination_types_dict: Dict[Union[str, int], Any],
+    formula_engine: Optional[Any] = None,
+    db_handler: Optional[Any] = None
+) -> str:
+    """
+    AI/ETイベントのNOTE文字列を生成（イベント詳細ウィンドウと同じロジック）
+    
+    この関数は、イベント詳細ウィンドウとCowCardイベント履歴の両方で使用される
+    共通のNOTE生成ロジックです。
+    
+    Args:
+        event: イベントデータ（event_number, json_data, id, cow_auto_id を含む）
+        technicians_dict: technician_code -> technician_name の辞書
+        insemination_types_dict: insemination_type_code -> type_name の辞書
+        formula_engine: FormulaEngine インスタンス（受胎ステータス計算用、オプション）
+        db_handler: DBHandler インスタンス（受胎ステータス計算用、オプション）
+    
+    Returns:
+        NOTE表示文字列（整列済み）、データがない場合は空文字列
+    """
+    from modules.rule_engine import RuleEngine
+    
+    event_number = event.get('event_number')
+    json_data = event.get('json_data', {})
+    
+    # AI/ETイベント以外の場合は空文字列を返す
+    if event_number not in [RuleEngine.EVENT_AI, RuleEngine.EVENT_ET]:
+        return ''
+    
+    # json_dataが空の場合は空文字列を返す
+    if not json_data:
+        return ''
+    
+    # 受胎ステータスを計算（formula_engineとdb_handlerが提供されている場合）
+    conception_status = None
+    if formula_engine and db_handler:
+        try:
+            event_id = event.get('id')
+            cow_auto_id = event.get('cow_auto_id')
+            if event_id and cow_auto_id:
+                cow = db_handler.get_cow_by_auto_id(cow_auto_id)
+                if cow:
+                    all_events = db_handler.get_events_by_cow(cow_auto_id, include_deleted=False)
+                    status_dict = formula_engine.get_ai_conception_status(all_events, cow)
+                    conception_status = status_dict.get(event_id)
+        except Exception as e:
+            logging.debug(f"build_ai_et_event_note: 受胎ステータス計算エラー: {e}")
+    
+    # json_dataからoutcomeを取得（P/O/R/N）
+    outcome = json_data.get('outcome')
+    # 既存のconception_statusがある場合は優先、なければoutcomeを使用
+    display_status = conception_status or outcome
+    
+    # 授精カウントを取得
+    insemination_count = json_data.get('insemination_count')
+    if insemination_count is not None:
+        try:
+            insemination_count = int(insemination_count)
+        except (ValueError, TypeError):
+            insemination_count = None
+    
+    # format_insemination_event関数を使用して表示文字列を生成
+    note = format_insemination_event(
+        json_data,
+        technicians_dict,
+        insemination_types_dict,
+        display_status,
+        cow_id=None,
+        insemination_count=insemination_count
+    )
+    
+    # format_insemination_eventがNoneを返した場合は空文字列
+    if note is None:
+        return ''
+    
+    # 先頭の全角スペースのみ削除して左揃え（内容は維持）
+    # format_insemination_eventは常に何らかの文字列を返す（全角スペースだけでも）
+    if note:
+        # 先頭の全角スペースだけを削除（内容が全角スペースだけの場合は削除しない）
+        original_note = note
+        # 全角スペース以外の文字が含まれているか確認
+        stripped = note.replace('　', '').replace(' ', '').strip()
+        has_content = bool(stripped)
+        
+        if has_content:
+            # 内容がある場合は先頭の全角スペースを削除して左揃え
+            while note.startswith('　'):
+                note = note[1:]
+            note = note.strip()
+        else:
+            # 全角スペースだけの場合は先頭の全角スペースを削除して左揃え
+            note = original_note.lstrip('　').strip()
+            # すべて削除された場合は元に戻す
+            if not note:
+                note = original_note
+    
+    return note
 

@@ -16,42 +16,42 @@
   },
   "102": {
     "alias": "WGT",
-    "name_jp": "WGT",
+    "name_jp": "体重",
     "category": "PRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "103": {
     "alias": "HYGS",
-    "name_jp": "HYGS",
+    "name_jp": "衛生スコア",
     "category": "PRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "104": {
     "alias": "HKS",
-    "name_jp": "HKS",
+    "name_jp": "飛節スコア",
     "category": "PRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "105": {
     "alias": "RFS",
-    "name_jp": "RFS",
+    "name_jp": "ルーメンフィルスコア",
     "category": "PRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "106": {
     "alias": "LUS",
-    "name_jp": "LUS",
+    "name_jp": "肺エコースコア",
     "category": "PRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "110": {
     "alias": "STOPM",
-    "name_jp": "STOPM",
+    "name_jp": "泌乳停止",
     "category": "PRODUCTION",
     "input_code": null,
     "input_fields": []
@@ -59,7 +59,7 @@
   "200": {
     "alias": "AI",
     "name_jp": "AI",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": [
       {
@@ -82,7 +82,7 @@
   "201": {
     "alias": "ET",
     "name_jp": "ET",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": [
       {
@@ -100,7 +100,7 @@
   "202": {
     "alias": "CALV",
     "name_jp": "分娩",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": [
       {
@@ -123,35 +123,35 @@
   "203": {
     "alias": "DRY",
     "name_jp": "乾乳",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "204": {
     "alias": "STOPR",
     "name_jp": "繁殖停止",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "205": {
     "alias": "SOLD",
     "name_jp": "売却",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "206": {
     "alias": "DEAD",
-    "name_jp": "死亡・淘汰",
-    "category": "BREEDING",
+    "name_jp": "死亡・廃用",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "300": {
     "alias": "FCHK",
     "name_jp": "フレッシュチェック",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": [
       {
@@ -184,7 +184,7 @@
   "301": {
     "alias": "REPRO",
     "name_jp": "繁殖検査",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": [
       {
@@ -217,7 +217,7 @@
   "302": {
     "alias": "PDN",
     "name_jp": "妊娠鑑定マイナス",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": [
       {
@@ -250,133 +250,47 @@
   "303": {
     "alias": "PDP",
     "name_jp": "妊娠鑑定プラス",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
-    "input_fields": []
+    "input_fields": [
+      {
+        "key": "twin",
+        "label": "双子",
+        "datatype": "bool"
+      }
+    ]
   },
   "304": {
     "alias": "PDP2",
     "name_jp": "妊娠鑑定プラス：直近以外",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
-    "input_fields": []
+    "input_fields": [
+      {
+        "key": "twin",
+        "label": "双子",
+        "datatype": "bool"
+      }
+    ]
   },
   "305": {
     "alias": "ABRT",
     "name_jp": "流産",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "306": {
     "alias": "PAGN",
     "name_jp": "PAGマイナス",
-    "category": "BREEDING",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": []
   },
   "307": {
     "alias": "PAGP",
     "name_jp": "PAGプラス",
-    "category": "BREEDING",
-    "input_code": null,
-    "input_fields": []
-  },
-  "400": {
-    "alias": "MAST",
-    "name_jp": "乳房炎",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "401": {
-    "alias": "HOOF",
-    "name_jp": "蹄病",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "402": {
-    "alias": "LAME",
-    "name_jp": "跛行",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "403": {
-    "alias": "METR",
-    "name_jp": "子宮炎",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "404": {
-    "alias": "RP",
-    "name_jp": "胎盤停滞",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "405": {
-    "alias": "KETO",
-    "name_jp": "ケトーシス",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "406": {
-    "alias": "MFV",
-    "name_jp": "低Ca血症",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "407": {
-    "alias": "DA",
-    "name_jp": "第四胃変位",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "408": {
-    "alias": "RESP",
-    "name_jp": "呼吸器疾患",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "409": {
-    "alias": "GI",
-    "name_jp": "消化器疾患",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "410": {
-    "alias": "DIAR",
-    "name_jp": "下痢",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "411": {
-    "alias": "MSK",
-    "name_jp": "運動器疾患",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "412": {
-    "alias": "INJ",
-    "name_jp": "外傷",
-    "category": "HEALTH",
-    "input_code": null,
-    "input_fields": []
-  },
-  "413": {
-    "alias": "HOTH",
-    "name_jp": "その他健康",
-    "category": "HEALTH",
+    "category": "REPRODUCTION",
     "input_code": null,
     "input_fields": []
   },
@@ -385,7 +299,65 @@
     "name_jp": "導入",
     "category": "MANAGEMENT",
     "input_code": null,
-    "input_fields": []
+    "input_fields": [
+      {
+        "key": "jpn10",
+        "label": "個体識別番号（１０桁）",
+        "datatype": "str",
+        "required": true,
+        "description": "入力必須。そこから自動的に拡大４桁を取得"
+      },
+      {
+        "key": "breed",
+        "label": "品種",
+        "datatype": "str"
+      },
+      {
+        "key": "birth_date",
+        "label": "生年月日",
+        "datatype": "str",
+        "description": "分娩イベントに紐づいた導入イベントであれば母牛の分娩月日が自動入力"
+      },
+      {
+        "key": "calving_date",
+        "label": "分娩月日",
+        "datatype": "str"
+      },
+      {
+        "key": "lactation",
+        "label": "産次",
+        "datatype": "int"
+      },
+      {
+        "key": "reproduction_code",
+        "label": "繁殖コード",
+        "datatype": "int",
+        "description": "月齢が11か月以上であれば入力する、未満であれば入力不要"
+      },
+      {
+        "key": "last_ai_date",
+        "label": "最終授精日",
+        "datatype": "str",
+        "description": "繁殖コードが授精中もしくは妊娠、乾乳であれば入力。さらに妊娠、乾乳であればこれが受胎日となる"
+      },
+      {
+        "key": "pen",
+        "label": "群",
+        "datatype": "str"
+      },
+      {
+        "key": "dam_jpn10",
+        "label": "母牛",
+        "datatype": "str",
+        "description": "分娩イベントに紐づいた導入イベントであれば、母牛のJPN10が自動入力"
+      },
+      {
+        "key": "sire",
+        "label": "父",
+        "datatype": "str",
+        "description": "分娩イベントに紐づいた導入イベントであれば、母牛の受胎のAIイベントもしくはETイベントのSIREを自動入力"
+      }
+    ]
   },
   "601": {
     "alias": "MILK_TEST",
@@ -496,78 +468,176 @@
   },
   "620": {
     "alias": "TRIM",
-    "name_jp": "TRIM",
+    "name_jp": "削蹄（個体）",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "621": {
     "alias": "TRIMA",
-    "name_jp": "TRIMA",
+    "name_jp": "削蹄（群）",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "622": {
     "alias": "VACC",
-    "name_jp": "VACC",
+    "name_jp": "ワクチン（個体）",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "623": {
     "alias": "VACCA",
-    "name_jp": "VACCA",
+    "name_jp": "ワクチン（群）",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "624": {
     "alias": "DEW",
-    "name_jp": "DEW",
+    "name_jp": "駆虫",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "625": {
     "alias": "SAMP",
-    "name_jp": "SAMP",
+    "name_jp": "採材",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "626": {
     "alias": "LAB",
-    "name_jp": "LAB",
+    "name_jp": "血液検査",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "627": {
     "alias": "FEC",
-    "name_jp": "FEC",
+    "name_jp": "糞便検査",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "628": {
     "alias": "CFEED",
-    "name_jp": "CFEED",
+    "name_jp": "子牛飼料変更",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "629": {
     "alias": "FEED",
-    "name_jp": "FEED",
+    "name_jp": "飼料変更",
     "category": "TASK",
     "input_code": null,
     "input_fields": []
   },
   "630": {
     "alias": "TOTH",
-    "name_jp": "TOTH",
+    "name_jp": "その他",
     "category": "TASK",
+    "input_code": null,
+    "input_fields": []
+  },
+  "414": {
+    "alias": "INJ",
+    "name_jp": "外傷",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "413": {
+    "alias": "MSK",
+    "name_jp": "運動器疾患",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "412": {
+    "alias": "DIAR",
+    "name_jp": "下痢",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "411": {
+    "alias": "GI",
+    "name_jp": "消化器疾患",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "410": {
+    "alias": "RESP",
+    "name_jp": "呼吸器疾患",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "409": {
+    "alias": "DA",
+    "name_jp": "第四胃変位",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "408": {
+    "alias": "MFV",
+    "name_jp": "低Ca血症",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "407": {
+    "alias": "KETO",
+    "name_jp": "ケトーシス",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "406": {
+    "alias": "RP",
+    "name_jp": "胎盤停滞",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "405": {
+    "alias": "METR",
+    "name_jp": "子宮炎",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "404": {
+    "alias": "LAME",
+    "name_jp": "跛行",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "403": {
+    "alias": "HOOF",
+    "name_jp": "蹄病",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "401": {
+    "alias": "MAST",
+    "name_jp": "乳房炎",
+    "category": "HEALTH",
+    "input_code": null,
+    "input_fields": []
+  },
+  "400": {
+    "alias": "CALV_DISEASE",
+    "name_jp": "分娩時疾病",
+    "category": "HEALTH",
     "input_code": null,
     "input_fields": []
   }

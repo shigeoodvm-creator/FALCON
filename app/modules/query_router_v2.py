@@ -43,9 +43,9 @@ class QueryRouterV2:
     
     # キーワード条件マッピング
     KEYWORD_CONDITIONS = {
-        "妊娠牛": {"item_key": "RC", "operator": "=", "value": 3},
-        "空胎": {"item_key": "RC", "operator": "=", "value": 5},
-        "乾乳牛": {"item_key": "RC", "operator": "=", "value": 4},
+        "妊娠牛": {"item_key": "RC", "operator": "=", "value": 5},  # RC_PREGNANT
+        "空胎": {"item_key": "RC", "operator": "=", "value": 4},  # RC_OPEN
+        "乾乳牛": {"item_key": "RC", "operator": "=", "value": 6},  # RC_DRY
         "未授精": {"item_key": "BRED", "operator": "=", "value": 0},
         "初回授精": {"item_key": "BRED", "operator": "=", "value": 1},
     }

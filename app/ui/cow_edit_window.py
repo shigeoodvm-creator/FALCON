@@ -38,8 +38,6 @@ class CowEditWindow:
         self.window = tk.Toplevel(parent)
         self.window.title("個体編集")
         self.window.geometry("500x400")
-        self.window.transient(parent)
-        self.window.grab_set()
         
         # 変数
         self.cow_id_var = tk.StringVar(value=self.cow.get('cow_id', ''))
@@ -202,6 +200,7 @@ class CowEditWindow:
             'bthd': bthd,
             'entr': entr,
             'lact': lact,
+            'baseline_lact': lact,  # 産次編集時は baseline も同じ値に（分娩削除でこの産次に戻る）
             'clvd': clvd,
             'rc': self.cow.get('rc'),  # 繁殖コードは変更しない（RuleEngineで管理）
             'pen': pen,
@@ -234,6 +233,43 @@ class CowEditWindow:
     def show(self):
         """ウィンドウを表示"""
         self.window.wait_window()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

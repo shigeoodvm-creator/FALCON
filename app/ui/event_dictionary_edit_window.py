@@ -40,9 +40,7 @@ class EventDictionaryEditWindow:
         # ウィンドウを作成
         self.window = tk.Toplevel(parent)
         self.window.title(f"イベント辞書編集 - {event_number}")
-        self.window.geometry("700x600")
-        self.window.transient(parent)
-        self.window.grab_set()
+        self.window.geometry("700x480")
         
         # 編集用のデータ（コピー）
         self.edited_data = {
@@ -91,7 +89,7 @@ class EventDictionaryEditWindow:
         ttk.Label(info_frame, text="カテゴリ:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
         self.category_combo = ttk.Combobox(
             info_frame,
-            values=["BREEDING", "PRODUCTION", "HEALTH", "MILK_TEST", "MANAGEMENT", "TASK"],
+            values=["REPRODUCTION", "PRODUCTION", "HEALTH", "MILK_TEST", "MANAGEMENT", "TASK"],
             width=27,
             state="readonly"
         )
@@ -136,45 +134,6 @@ class EventDictionaryEditWindow:
         # HEXコード入力時の検証とプレビュー更新
         self.display_color_entry.bind('<KeyRelease>', self._on_color_entry_changed)
         
-        # 入力フィールドフレーム
-        fields_frame = ttk.LabelFrame(main_frame, text="入力フィールド", padding=10)
-        fields_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # ヘッダー
-        header_frame = ttk.Frame(fields_frame)
-        header_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(header_frame, text="キー", width=15, font=("", 9, "bold")).pack(side=tk.LEFT, padx=2)
-        ttk.Label(header_frame, text="ラベル", width=20, font=("", 9, "bold")).pack(side=tk.LEFT, padx=2)
-        ttk.Label(header_frame, text="データ型", width=10, font=("", 9, "bold")).pack(side=tk.LEFT, padx=2)
-        ttk.Label(header_frame, text="操作", width=8, font=("", 9, "bold")).pack(side=tk.LEFT, padx=2)
-        
-        # スクロール可能なフレーム
-        canvas = tk.Canvas(fields_frame, height=200)
-        scrollbar = ttk.Scrollbar(fields_frame, orient=tk.VERTICAL, command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        self.fields_container = scrollable_frame
-        self.field_widgets = []
-        
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # 入力フィールド追加ボタン
-        add_field_btn = ttk.Button(
-            fields_frame,
-            text="入力フィールドを追加",
-            command=self._add_input_field
-        )
-        add_field_btn.pack(pady=5)
-        
         # ボタンフレーム
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X)
@@ -215,59 +174,6 @@ class EventDictionaryEditWindow:
         if display_color:
             self.display_color_entry.insert(0, display_color)
             self._update_color_preview(display_color)
-        
-        # 入力フィールドを表示
-        for field in self.edited_data.get('input_fields', []):
-            self._add_input_field(field)
-    
-    def _add_input_field(self, field_data: Optional[Dict[str, Any]] = None):
-        """入力フィールドを追加"""
-        if field_data is None:
-            field_data = {'key': '', 'label': '', 'datatype': 'str'}
-        
-        field_frame = ttk.Frame(self.fields_container)
-        field_frame.pack(fill=tk.X, pady=2)
-        
-        # key
-        key_entry = ttk.Entry(field_frame, width=15)
-        key_entry.insert(0, field_data.get('key', ''))
-        key_entry.pack(side=tk.LEFT, padx=2)
-        
-        # label
-        label_entry = ttk.Entry(field_frame, width=20)
-        label_entry.insert(0, field_data.get('label', ''))
-        label_entry.pack(side=tk.LEFT, padx=2)
-        
-        # datatype
-        datatype_combo = ttk.Combobox(
-            field_frame,
-            values=["str", "int", "float"],
-            width=10,
-            state="readonly"
-        )
-        datatype_combo.set(field_data.get('datatype', 'str'))
-        datatype_combo.pack(side=tk.LEFT, padx=2)
-        
-        # 削除ボタン
-        delete_btn = ttk.Button(
-            field_frame,
-            text="削除",
-            command=lambda: self._remove_input_field(field_frame)
-        )
-        delete_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.field_widgets.append({
-            'frame': field_frame,
-            'key': key_entry,
-            'label': label_entry,
-            'datatype': datatype_combo
-        })
-    
-    def _remove_input_field(self, field_frame: ttk.Frame):
-        """入力フィールドを削除"""
-        # field_widgetsから削除
-        self.field_widgets = [w for w in self.field_widgets if w['frame'] != field_frame]
-        field_frame.destroy()
     
     def _on_color_picker(self):
         """カラーピッカーを開く"""
@@ -349,19 +255,12 @@ class EventDictionaryEditWindow:
                 messagebox.showerror("エラー", "入力コードは整数で入力してください")
                 return
         
-        # 入力フィールドを取得
-        input_fields = []
-        for widget in self.field_widgets:
-            key = widget['key'].get().strip()
-            label = widget['label'].get().strip()
-            datatype = widget['datatype'].get()
-            
-            if key and label:
-                input_fields.append({
-                    'key': key,
-                    'label': label,
-                    'datatype': datatype
-                })
+        # 入力フィールドは開発側で管理するため、既存の値をそのまま維持する
+        input_fields = self.original_event_data.get('input_fields', [])
+        if isinstance(input_fields, list):
+            input_fields = input_fields.copy()
+        else:
+            input_fields = []
         
         # display_colorを取得・検証
         display_color = self.display_color_entry.get().strip()
@@ -410,7 +309,9 @@ class EventDictionaryEditWindow:
             # イベントを更新
             event_dictionary[self.event_number] = merged_data
             
-            # 保存
+            # 保存（フォルダが存在しない場合は作成）
+            if self.event_dictionary_path:
+                self.event_dictionary_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.event_dictionary_path, 'w', encoding='utf-8') as f:
                 json.dump(event_dictionary, f, ensure_ascii=False, indent=2)
             

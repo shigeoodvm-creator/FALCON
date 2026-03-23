@@ -65,7 +65,7 @@ class CowListView:
         self.tree.heading('jpn10', text='個体識別番号')
         self.tree.heading('brd', text='品種')
         self.tree.heading('lact', text='産次')
-        self.tree.heading('rc', text='繁殖コード')
+        self.tree.heading('rc', text='繁殖区分')
         self.tree.heading('pen', text='群')
         
         self.tree.column('cow_id', width=100)
@@ -130,16 +130,17 @@ class CowListView:
             rc = cow.get('rc', '')
             pen = cow.get('pen', '')
             
-            # 繁殖コードを表示名に変換
+            # 繁殖コード表示：コード番号：日本語のみ
+            from modules.rule_engine import RuleEngine
             rc_names = {
-                1: "Fresh",
-                2: "Bred",
-                3: "Pregnant",
-                4: "Dry",
-                5: "Open",
-                6: "Stopped"
+                RuleEngine.RC_STOPPED: "1：繁殖停止",
+                RuleEngine.RC_FRESH: "2：分娩後",
+                RuleEngine.RC_BRED: "3：授精後",
+                RuleEngine.RC_OPEN: "4：空胎",
+                RuleEngine.RC_PREGNANT: "5：妊娠中",
+                RuleEngine.RC_DRY: "6：乾乳中"
             }
-            rc_text = rc_names.get(rc, '') if rc is not None else ''
+            rc_text = rc_names.get(rc, f'{rc}：' if rc is not None else '') if rc is not None else ''
             
             self.tree.insert('', 'end', values=(
                 cow_id, jpn10, brd, lact, rc_text, pen

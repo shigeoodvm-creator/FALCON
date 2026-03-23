@@ -34,8 +34,6 @@ class ItemEditorWindow:
         self.window = tk.Toplevel(parent)
         self.window.title(f"項目を編集 - {item_key}")
         self.window.geometry("640x520")
-        self.window.transient(parent)
-        self.window.grab_set()
 
         self.origin = item_data.get("origin") or item_data.get("type") or "custom"
         self._create_widgets()
@@ -71,14 +69,23 @@ class ItemEditorWindow:
         )
         self.datatype_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
 
+        ttk.Label(info_frame, text="カテゴリー:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
+        self.category_combo = ttk.Combobox(
+            info_frame,
+            values=["CORE", "REPRODUCTION", "PRODUCTION", "DHI", "HEALTH", "MANAGEMENT"],
+            width=27,
+            state="readonly",
+        )
+        self.category_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
+
         self.editable_var = tk.BooleanVar(value=True)
         self.editable_check = ttk.Checkbutton(
             info_frame, text="編集可能", variable=self.editable_var
         )
-        self.editable_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.editable_check.grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
 
-        ttk.Label(info_frame, text="origin:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
-        ttk.Label(info_frame, text=self.origin).grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(info_frame, text="origin:").grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(info_frame, text=self.origin).grid(row=5, column=1, sticky=tk.W, padx=5, pady=5)
 
         # 計算式/ソース（calc/event項目のみ）
         self.formula_frame = ttk.LabelFrame(main_frame, text="計算式 / ソース", padding=10)
@@ -117,6 +124,12 @@ class ItemEditorWindow:
         else:
             self.datatype_combo.set("str")
 
+        category = self.original_data.get("category") or ""
+        if category:
+            self.category_combo.set(category)
+        else:
+            self.category_combo.set("CORE")
+
         self.editable_var.set(self.original_data.get("editable", True))
 
         desc = self.original_data.get("description") or ""
@@ -144,6 +157,7 @@ class ItemEditorWindow:
     def _on_save(self):
         label = self.label_entry.get().strip()
         datatype = self.datatype_combo.get()
+        category = self.category_combo.get()
         editable = self.editable_var.get()
         description = self.description_text.get(1.0, tk.END).strip()
 
@@ -153,6 +167,10 @@ class ItemEditorWindow:
 
         if not datatype:
             messagebox.showerror("エラー", "データ型を選択してください")
+            return
+
+        if not category:
+            messagebox.showerror("エラー", "カテゴリーを選択してください")
             return
 
         try:
@@ -168,6 +186,7 @@ class ItemEditorWindow:
         current["display_name"] = label
         current["datatype"] = datatype
         current["data_type"] = datatype  # data_type も保存（互換性のため）
+        current["category"] = category
         current["editable"] = editable
         if description:
             current["description"] = description
@@ -190,6 +209,9 @@ class ItemEditorWindow:
         item_dict[self.item_key] = current
 
         try:
+            # フォルダが存在しない場合は作成
+            if self.item_dictionary_path:
+                self.item_dictionary_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.item_dictionary_path, "w", encoding="utf-8") as f:
                 json.dump(item_dict, f, ensure_ascii=False, indent=2)
             logger.info(f"item_dictionary updated: {self.item_key}")

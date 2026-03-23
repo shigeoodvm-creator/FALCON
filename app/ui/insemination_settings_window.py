@@ -34,8 +34,6 @@ class InseminationSettingsWindow:
         self.window = tk.Toplevel(parent)
         self.window.title("授精設定")
         self.window.geometry("700x600")
-        self.window.transient(parent)
-        self.window.grab_set()
         
         # 設定をロード
         self._load_settings()
@@ -55,8 +53,8 @@ class InseminationSettingsWindow:
             try:
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    self.technicians = data.get('technicians', {})
-                    self.insemination_types = data.get('insemination_types', {})
+                    self.technicians = self._normalize_code_dict(data.get('technicians', {}))
+                    self.insemination_types = self._normalize_code_dict(data.get('insemination_types', {}))
             except Exception as e:
                 logging.error(f"授精設定ファイル読み込みエラー: {e}")
                 messagebox.showerror("エラー", f"設定ファイルの読み込みに失敗しました: {e}")
@@ -66,12 +64,14 @@ class InseminationSettingsWindow:
             # ファイルが存在しない場合は空の初期データ
             self.technicians = {}
             self.insemination_types = {}
+            self.technicians = {}
+            self.insemination_types = {}
     
     def _save_settings(self):
         """設定を保存"""
         data = {
-            "technicians": self.technicians,
-            "insemination_types": self.insemination_types
+            "technicians": self._normalize_code_dict(self.technicians),
+            "insemination_types": self._normalize_code_dict(self.insemination_types)
         }
         
         try:
@@ -216,6 +216,15 @@ class InseminationSettingsWindow:
         
         # データを表示
         self._refresh_trees()
+
+    @staticmethod
+    def _normalize_code_dict(raw: Dict[Any, str]) -> Dict[str, str]:
+        """コード辞書のキーを文字列に正規化"""
+        normalized: Dict[str, str] = {}
+        for code, name in (raw or {}).items():
+            code_str = str(code)
+            normalized[code_str] = name
+        return normalized
     
     def _refresh_trees(self):
         """Treeviewを更新"""
@@ -223,14 +232,21 @@ class InseminationSettingsWindow:
         for item in self.technician_tree.get_children():
             self.technician_tree.delete(item)
         
-        for code, name in sorted(self.technicians.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 999):
+        def sort_key(item):
+            code = str(item[0])
+            return int(code) if code.isdigit() else 999
+        normalized_techs = self._normalize_code_dict(self.technicians)
+        self.technicians = normalized_techs
+        for code, name in sorted(normalized_techs.items(), key=sort_key):
             self.technician_tree.insert("", tk.END, values=(code, name))
         
         # 授精種類コード
         for item in self.type_tree.get_children():
             self.type_tree.delete(item)
         
-        for code, name in sorted(self.insemination_types.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 999):
+        normalized_types = self._normalize_code_dict(self.insemination_types)
+        self.insemination_types = normalized_types
+        for code, name in sorted(normalized_types.items(), key=sort_key):
             self.type_tree.insert("", tk.END, values=(code, name))
     
     def _show_context_menu(self, event, menu: tk.Menu):
@@ -247,8 +263,6 @@ class InseminationSettingsWindow:
         dialog = tk.Toplevel(self.window)
         dialog.title("授精師コード追加")
         dialog.geometry("400x150")
-        dialog.transient(self.window)
-        dialog.grab_set()
         
         ttk.Label(dialog, text="コード:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         code_entry = ttk.Entry(dialog, width=30)
@@ -274,7 +288,9 @@ class InseminationSettingsWindow:
                 messagebox.showwarning("警告", "このコードは既に登録されています")
                 return
             
-            self.technicians[code] = name
+            code_str = str(code)
+            self.technicians = self._normalize_code_dict(self.technicians)
+            self.technicians[code_str] = name
             self._refresh_trees()
             dialog.destroy()
         
@@ -300,8 +316,6 @@ class InseminationSettingsWindow:
         dialog = tk.Toplevel(self.window)
         dialog.title("授精師コード編集")
         dialog.geometry("400x150")
-        dialog.transient(self.window)
-        dialog.grab_set()
         
         ttk.Label(dialog, text="コード:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         code_label = ttk.Label(dialog, text=code)
@@ -343,7 +357,10 @@ class InseminationSettingsWindow:
         name = item['values'][1]
         
         if messagebox.askyesno("確認", f"授精師コード「{code}: {name}」を削除しますか？"):
-            del self.technicians[code]
+            code_str = str(code)
+            self.technicians = self._normalize_code_dict(self.technicians)
+            if code_str in self.technicians:
+                del self.technicians[code_str]
             self._refresh_trees()
     
     def _add_type(self):
@@ -351,8 +368,6 @@ class InseminationSettingsWindow:
         dialog = tk.Toplevel(self.window)
         dialog.title("授精種類コード追加")
         dialog.geometry("400x150")
-        dialog.transient(self.window)
-        dialog.grab_set()
         
         ttk.Label(dialog, text="コード:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         code_entry = ttk.Entry(dialog, width=30)
@@ -404,8 +419,6 @@ class InseminationSettingsWindow:
         dialog = tk.Toplevel(self.window)
         dialog.title("授精種類コード編集")
         dialog.geometry("400x150")
-        dialog.transient(self.window)
-        dialog.grab_set()
         
         ttk.Label(dialog, text="コード:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
         code_label = ttk.Label(dialog, text=code)
@@ -463,6 +476,43 @@ class InseminationSettingsWindow:
     def show(self):
         """ウィンドウを表示"""
         self.window.wait_window()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

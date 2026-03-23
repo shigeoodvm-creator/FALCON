@@ -4,12 +4,15 @@ FALCON2 - イベント詳細ウィンドウ
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from pathlib import Path
 import json
+import logging
 
 from db.db_handler import DBHandler
 from modules.rule_engine import RuleEngine
+from modules.event_display import format_insemination_event, build_ai_et_event_note
+from constants import FARMS_ROOT
 
 
 class EventDetailWindow:
@@ -40,12 +43,15 @@ class EventDetailWindow:
         if not self.event:
             raise ValueError(f"イベントが見つかりません: event_id={event_id}")
         
+        # 授精設定辞書を読み込む（AI/ETイベント用）
+        self.technicians_dict: Dict[str, str] = {}
+        self.insemination_types_dict: Dict[str, str] = {}
+        self._load_insemination_settings()
+        
         # ウィンドウ作成
         self.window = tk.Toplevel(parent)
         self.window.title("イベント詳細")
         self.window.geometry("600x500")
-        self.window.transient(parent)
-        self.window.grab_set()
         
         self._create_widgets()
         self._display_event()
@@ -79,6 +85,51 @@ class EventDetailWindow:
             return event
         
         return None
+    
+    def _load_insemination_settings(self):
+        """授精設定をロード（AI/ETイベント用）"""
+        try:
+            # イベントからcow_auto_idを取得
+            cow_auto_id = self.event.get('cow_auto_id')
+            if not cow_auto_id:
+                logging.warning("EventDetailWindow: cow_auto_id not found")
+                return
+            
+            # cowデータを取得してfrmを取得
+            cow = self.db.get_cow_by_auto_id(cow_auto_id)
+            if not cow:
+                logging.warning(f"EventDetailWindow: cow not found: cow_auto_id={cow_auto_id}")
+                return
+            
+            frm = cow.get('frm')
+            if not frm:
+                logging.warning("EventDetailWindow: frm not found")
+                return
+            
+            # 農場パスを構築
+            farm_path = FARMS_ROOT / frm
+            settings_file = farm_path / "insemination_settings.json"
+            
+            if not settings_file.exists():
+                logging.warning(f"EventDetailWindow: insemination_settings.json not found: {settings_file}")
+                return
+            
+            # 設定ファイルを読み込む
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            
+            self.technicians_dict = settings.get('technicians', {})
+            self.insemination_types_dict = settings.get('insemination_types', {})
+            
+            logging.debug(
+                f"EventDetailWindow: Loaded insemination settings: "
+                f"technicians={len(self.technicians_dict)}, "
+                f"insemination_types={len(self.insemination_types_dict)}"
+            )
+        except Exception as e:
+            logging.error(f"EventDetailWindow: Failed to load insemination settings: {e}")
+            self.technicians_dict = {}
+            self.insemination_types_dict = {}
     
     def _get_event_name(self, event_number: int) -> str:
         """イベント番号からイベント名を取得"""
@@ -238,61 +289,44 @@ class EventDetailWindow:
     
     def _format_insemination_display(self, json_data: Dict[str, Any]) -> str:
         """
-        AI/ETイベントの表示文字列を生成
+        AI/ETイベントの表示文字列を生成（共通関数を使用）
         
         Args:
             json_data: イベントの json_data
         
         Returns:
-            表示文字列（例: "3h5555/Sonoda/自然発情"）
+            表示文字列（例: "14H16102　　Sonoda　　１　P"）
         """
-        parts = []
+        # 共通関数を使用（CowCardイベント履歴と同じロジック）
+        from db.db_handler import DBHandler
+        from modules.formula_engine import FormulaEngine
         
-        # SIRE（そのまま表示）
-        sire = json_data.get('sire')
-        if sire:
-            parts.append(str(sire))
+        # formula_engineとdb_handlerはイベント詳細ウィンドウでは使用しない（受胎ステータス計算なし）
+        note = build_ai_et_event_note(
+            self.event,
+            self.technicians_dict,
+            self.insemination_types_dict,
+            formula_engine=None,  # イベント詳細では受胎ステータス計算をスキップ
+            db_handler=None
+        )
         
-        # 授精師名称（コードから名称を取得、登録されていなければ「-」）
-        technician_code = json_data.get('technician_code') or json_data.get('technician') or json_data.get('inseminator_code')
-        technician_name = json_data.get('inseminator_name')
-        
-        if technician_name:
-            # 既に名称が保存されている場合はそれを使用
-            parts.append(technician_name)
-        elif technician_code:
-            # 名称が保存されていない場合は「-」を表示
-            # （event_detail_window では SettingsManager にアクセスできないため）
-            parts.append('-')
-        else:
-            parts.append('-')
-        
-        # 授精種類名称（コードから名称を取得、登録されていなければ「-」）
-        type_code = json_data.get('insemination_type_code') or json_data.get('type')
-        type_name = json_data.get('insemination_type_name')
-        
-        if type_name:
-            # 既に名称が保存されている場合はそれを使用
-            parts.append(type_name)
-        elif type_code:
-            # 名称が保存されていない場合は「-」を表示
-            # （event_detail_window では SettingsManager にアクセスできないため）
-            parts.append('-')
-        else:
-            parts.append('-')
-        
-        # NOTE欄と揃えて区切りは半角スペース2つ
-        display = "  ".join(parts)
-        
-        return display if display else ""
+        return note
     
     def _display_json_data(self, json_data: Dict[str, Any]):
         """JSONデータを表示"""
         event_number = self.event.get('event_number')
         
-        # AI/ETイベントの場合は特別な表示形式
+        # AI/ETイベントの場合は特別な表示形式（共通関数を使用）
         if event_number in [RuleEngine.EVENT_AI, RuleEngine.EVENT_ET]:
-            display_text = self._format_insemination_display(json_data)
+            # 共通関数を使用（CowCardイベント履歴と同じロジック）
+            # イベント詳細ウィンドウでは受胎ステータス計算をスキップ（formula_engine=None）
+            display_text = build_ai_et_event_note(
+                self.event,
+                self.technicians_dict,
+                self.insemination_types_dict,
+                formula_engine=None,  # イベント詳細では受胎ステータス計算をスキップ
+                db_handler=None
+            )
             if display_text:
                 self.detail_text.insert(tk.END, display_text)
             else:

@@ -75,7 +75,27 @@ class ExecutionPlan:
     # エラー情報
     errors: List[str] = field(default_factory=list)  # エラーメッセージ
     warnings: List[str] = field(default_factory=list)  # 警告メッセージ
-    
+
+    @property
+    def type(self) -> str:
+        """UI互換: query_type として analysis_type の文字列値を返す"""
+        return self.analysis_type.value
+
+    @property
+    def start(self) -> Optional[str]:
+        """UI互換: 期間開始"""
+        return self.period_start
+
+    @property
+    def end(self) -> Optional[str]:
+        """UI互換: 期間終了"""
+        return self.period_end
+
+    @property
+    def as_of_date(self) -> Optional[str]:
+        """UI互換: 基準日（period_end を流用）"""
+        return self.period_end
+
     def to_dict(self) -> Dict[str, Any]:
         """辞書形式に変換"""
         result = {
@@ -111,4 +131,20 @@ class ExecutionPlan:
             }
         
         return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

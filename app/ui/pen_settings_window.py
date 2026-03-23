@@ -33,8 +33,6 @@ class PenSettingsWindow:
         self.window = tk.Toplevel(parent)
         self.window.title("PEN設定")
         self.window.geometry("520x500")
-        self.window.transient(parent)
-        self.window.grab_set()
 
         # UI作成
         self._create_widgets()
@@ -186,4 +184,41 @@ class PenSettingsWindow:
     def show(self):
         """モーダル表示"""
         self.window.wait_window()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

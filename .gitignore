@@ -46,3 +46,49 @@ desktop.ini
 # Office temporary files
 ~$*
 
+# Secrets / API keys
+config/openai.json
+
+# Claude Code memory (personal, not for repo)
+.claude/
+
+# Windows shortcuts
+*.lnk
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

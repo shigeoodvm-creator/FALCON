@@ -1,0 +1,6 @@
+{
+  "include": ["app", "main.py", "scripts"],
+  "extraPaths": ["app", "scripts"],
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "warning"
+}

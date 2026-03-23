@@ -39,15 +39,13 @@ def _is_editable(data: Dict[str, Any]) -> bool:
     return data.get("editable", True)
 
 
+def _get_category(data: Dict[str, Any]) -> str:
+    """カテゴリーを取得"""
+    return data.get("category") or "-"
+
+
 class ItemDictionaryWindow:
     """項目辞書一覧ウィンドウ"""
-
-    ORIGIN_COLORS = {
-        "core": "#1e90ff",
-        "calc": "#cc6600",
-        "event": "#2e8b57",
-        "custom": "#555555",
-    }
 
     def __init__(
         self,
@@ -72,11 +70,24 @@ class ItemDictionaryWindow:
 
         self.item_dictionary: Dict[str, Any] = {}
         self.selected_item_key: Optional[str] = None
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", lambda *args: self._on_search_changed())
+        
+        # ソート状態管理（列名 -> ソート状態: None=元の順序, 'asc'=昇順, 'desc'=降順）
+        self.sort_states: Dict[str, Optional[str]] = {
+            "key": None,
+            "label": None,
+            "category": None,
+            "origin": None,
+            "datatype": None
+        }
+        # 元の順序を保持（項目キーの順序）
+        self.original_order: list = []
 
         self.window = tk.Toplevel(parent)
         self.window.title("項目辞書")
         self.window.geometry("900x640")
-        self.window.transient(parent)
+        self.window.configure(bg="#f5f5f5")
 
         self._load_item_dictionary()
         self._create_widgets()
@@ -92,46 +103,93 @@ class ItemDictionaryWindow:
             try:
                 with open(self.item_dict_path, "r", encoding="utf-8") as f:
                     self.item_dictionary = json.load(f)
+                # 元の順序を保持（項目キーの順序）
+                sorted_items = sorted(self.item_dictionary.items(), key=lambda x: x[0])
+                self.original_order = [key for key, _ in sorted_items]
+                logger.info(f"[ItemDictionaryWindow] 読み込み成功: {self.item_dict_path}")
+                logger.info(f"[ItemDictionaryWindow] 読み込んだ項目数: {len(self.item_dictionary)}")
+                logger.info(f"[ItemDictionaryWindow] 項目キー: {list(self.item_dictionary.keys())}")
+                
+                # TWIN項目が存在しない場合は追加
+                if "TWIN" not in self.item_dictionary:
+                    logger.info("[ItemDictionaryWindow] TWIN項目が見つからないため追加します")
+                    self.item_dictionary["TWIN"] = {
+                        "type": "calc",
+                        "origin": "calc",
+                        "data_type": "str",
+                        "formula": "twin_flag(events, cow)",
+                        "display_name": "双子フラグ",
+                        "description": "略称: TWIN（妊娠イベントで双子とされた個体で「双子」と表示。妊娠していない個体は未受胎と表示、妊娠しているかつ双子とされていない場合は空欄）",
+                        "category": "REPRODUCTION"
+                    }
+                    # ファイルに保存（フォルダが存在しない場合は作成）
+                    try:
+                        if self.item_dict_path:
+                            self.item_dict_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(self.item_dict_path, "w", encoding="utf-8") as f:
+                            json.dump(self.item_dictionary, f, ensure_ascii=False, indent=2)
+                        logger.info("[ItemDictionaryWindow] TWIN項目を追加して保存しました")
+                    except Exception as e:
+                        logger.error(f"[ItemDictionaryWindow] TWIN項目の保存に失敗: {e}")
             except Exception as e:
-                logger.error(f"item_dictionary.json 読み込みエラー: {e}")
+                logger.error(f"item_dictionary.json 読み込みエラー: {e}", exc_info=True)
                 self.item_dictionary = {}
+                self.original_order = []
         else:
+            logger.warning(f"[ItemDictionaryWindow] item_dictionary.json が見つかりません: {self.item_dict_path}")
             messagebox.showwarning(
                 "警告", f"item_dictionary.json が見つかりません: {self.item_dict_path}"
             )
             self.item_dictionary = {}
+            self.original_order = []
 
     def _create_widgets(self):
-        """ウィジェットを作成"""
-        title_label = ttk.Label(self.window, text="項目辞書一覧", font=("", 14, "bold"))
-        title_label.pack(pady=10)
+        """ウィジェットを作成（他ウィンドウと同一デザイン）"""
+        _df = "Meiryo UI"
+        bg = "#f5f5f5"
 
-        desc_label = ttk.Label(
-            self.window,
-            text="item_dictionary.json の内容を表示・編集します",
-            font=("", 9),
-        )
-        desc_label.pack(pady=(0, 10))
+        self.main_container = tk.Frame(self.window, bg=bg, padx=24, pady=16)
+        self.main_container.pack(fill=tk.BOTH, expand=True)
+        self.main_container.grid_rowconfigure(2, weight=1)
+        self.main_container.grid_columnconfigure(0, weight=1)
 
-        table_frame = ttk.Frame(self.window)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # ヘッダー（他ウィンドウと同一イメージ）
+        header = tk.Frame(self.main_container, bg=bg)
+        header.grid(row=0, column=0, sticky=tk.EW, pady=(0, 16))
+        tk.Label(header, text="\u2695", font=(_df, 22), bg=bg, fg="#3949ab").pack(side=tk.LEFT, padx=(0, 10))
+        title_frame = tk.Frame(header, bg=bg)
+        title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(title_frame, text="項目辞書一覧", font=(_df, 16, "bold"), bg=bg, fg="#263238").pack(anchor=tk.W)
+        tk.Label(title_frame, text="item_dictionary.json の内容を表示します", font=(_df, 10), bg=bg, fg="#607d8b").pack(anchor=tk.W)
 
-        columns = ("key", "label", "origin", "datatype", "editable")
-        self.tree = ttk.Treeview(
-            table_frame, columns=columns, show="headings", height=20
-        )
+        # 検索欄
+        search_frame = ttk.Frame(self.main_container)
+        search_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        search_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(search_frame, text="検索:", font=(_df, 9)).grid(row=0, column=0, padx=(0, 5), sticky=tk.W)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=40)
+        search_entry.grid(row=0, column=1, sticky=tk.EW)
+        ttk.Button(search_frame, text="クリア", command=self._clear_search, width=8).grid(row=0, column=2, padx=(5, 0))
 
-        self.tree.heading("key", text="項目キー")
-        self.tree.heading("label", text="表示名")
-        self.tree.heading("origin", text="origin")
-        self.tree.heading("datatype", text="データ型")
-        self.tree.heading("editable", text="編集可否")
+        table_frame = ttk.Frame(self.main_container)
+        table_frame.grid(row=2, column=0, sticky=tk.NSEW, pady=(0, 10))
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
 
-        self.tree.column("key", width=180, anchor=tk.W)
-        self.tree.column("label", width=200, anchor=tk.W)
+        columns = ("key", "label", "category", "origin", "datatype")
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=20)
+
+        self.tree.heading("key", text="項目キー", command=lambda: self._on_column_click("key"))
+        self.tree.heading("label", text="表示名", command=lambda: self._on_column_click("label"))
+        self.tree.heading("category", text="カテゴリー", command=lambda: self._on_column_click("category"))
+        self.tree.heading("origin", text="origin", command=lambda: self._on_column_click("origin"))
+        self.tree.heading("datatype", text="データ型", command=lambda: self._on_column_click("datatype"))
+
+        self.tree.column("key", width=150, anchor=tk.W)
+        self.tree.column("label", width=240, anchor=tk.W)
+        self.tree.column("category", width=120, anchor=tk.W)
         self.tree.column("origin", width=80, anchor=tk.CENTER)
         self.tree.column("datatype", width=100, anchor=tk.CENTER)
-        self.tree.column("editable", width=80, anchor=tk.CENTER)
 
         scrollbar_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         scrollbar_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -140,13 +198,12 @@ class ItemDictionaryWindow:
         self.tree.grid(row=0, column=0, sticky="nsew")
         scrollbar_y.grid(row=0, column=1, sticky="ns")
         scrollbar_x.grid(row=1, column=0, sticky="ew")
-        table_frame.grid_rowconfigure(0, weight=1)
-        table_frame.grid_columnconfigure(0, weight=1)
 
         self._populate_tree()
 
-        detail_frame = ttk.LabelFrame(self.window, text="詳細情報", padding=10)
-        detail_frame.pack(fill=tk.X, padx=10, pady=5)
+        detail_frame = ttk.LabelFrame(self.main_container, text="詳細情報", padding=10)
+        detail_frame.grid(row=3, column=0, sticky=tk.EW, pady=(0, 10))
+        detail_frame.grid_columnconfigure(0, weight=1)
 
         self.detail_text = tk.Text(detail_frame, height=7, wrap=tk.WORD, state=tk.DISABLED)
         self.detail_text.pack(fill=tk.BOTH, expand=True)
@@ -157,69 +214,168 @@ class ItemDictionaryWindow:
         self.context_menu.add_command(label="項目を編集", command=self._on_edit_selected)
         self.context_menu.add_command(label="計算式を確認", command=self._on_formula_selected)
         self.context_menu.add_command(label="項目を削除", command=self._on_delete_selected)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="新規項目を追加", command=self._on_add_new)
-
         self.tree.bind("<Button-3>", self._on_right_click)
         self.tree.bind("<Double-Button-1>", lambda e: self._on_edit_selected())
 
-        button_frame = ttk.Frame(self.window)
-        button_frame.pack(pady=10)
+        button_frame = ttk.Frame(self.main_container)
+        button_frame.grid(row=4, column=0, pady=(0, 10))
+        ttk.Button(button_frame, text="閉じる", command=self.window.destroy, width=12).pack(side=tk.LEFT, padx=5)
 
-        add_btn = ttk.Button(
-            button_frame, text="新規項目を追加", command=self._on_add_new, width=18
-        )
-        add_btn.pack(side=tk.LEFT, padx=5)
-
-        close_button = ttk.Button(
-            button_frame, text="閉じる", command=self.window.destroy, width=12
-        )
-        close_button.pack(side=tk.LEFT, padx=5)
-
-        debug_frame = ttk.LabelFrame(self.window, text="デバッグ情報", padding=5)
-        debug_frame.pack(fill=tk.X, padx=10, pady=5)
-
+        debug_frame = ttk.LabelFrame(self.main_container, text="デバッグ情報", padding=5)
+        debug_frame.grid(row=5, column=0, sticky=tk.EW, pady=(0, 5))
+        debug_frame.grid_columnconfigure(0, weight=1)
         dict_path_str = str(self.item_dict_path) if self.item_dict_path else "(未指定)"
-        ttk.Label(
-            debug_frame,
-            text=f"読み込み元: {dict_path_str}",
-            font=("", 8),
-            foreground="gray",
-        ).pack(anchor=tk.W, padx=5, pady=2)
+        ttk.Label(debug_frame, text=f"読み込み元: {dict_path_str}", font=("", 8), foreground="gray").pack(anchor=tk.W, padx=5, pady=2)
+        self._debug_count_label = ttk.Label(debug_frame, text=f"項目数: {len(self.item_dictionary)}", font=("", 8), foreground="gray")
+        self._debug_count_label.pack(anchor=tk.W, padx=5, pady=2)
+    
+    def _on_column_click(self, column: str):
+        """列ヘッダーがクリックされたときの処理（3段階ソート：昇順→降順→元の順序）"""
+        current_state = self.sort_states.get(column, None)
+        
+        # 他の列のソート状態をリセット
+        for col in self.sort_states:
+            if col != column:
+                self.sort_states[col] = None
+        
+        # ソート状態を切り替え：None → 'asc' → 'desc' → None
+        if current_state is None:
+            # 1クリック目：昇順
+            self.sort_states[column] = 'asc'
+            self._sort_tree(column, 'asc')
+        elif current_state == 'asc':
+            # 2クリック目：降順
+            self.sort_states[column] = 'desc'
+            self._sort_tree(column, 'desc')
+        else:
+            # 3クリック目：元の順序に戻す
+            self.sort_states[column] = None
+            self._sort_tree(column, None)
+    
+    def _sort_tree(self, column: str, sort_order: Optional[str]):
+        """Treeviewをソート（_populate_treeを呼び出して再構築）"""
+        # ソート状態を更新した後、_populate_treeを呼び出して再構築
+        self._populate_tree()
+    
+    def _update_column_headers(self):
+        """列ヘッダーにソートインジケーターを表示"""
+        headers = {
+            "key": "項目キー",
+            "label": "表示名",
+            "category": "カテゴリー",
+            "origin": "origin",
+            "datatype": "データ型"
+        }
+        
+        for col, base_text in headers.items():
+            state = self.sort_states.get(col, None)
+            if state == 'asc':
+                text = f"{base_text} ▲"
+            elif state == 'desc':
+                text = f"{base_text} ▼"
+            else:
+                text = base_text
+            
+            self.tree.heading(col, text=text, command=lambda c=col: self._on_column_click(c))
 
-        count_label = ttk.Label(
-            debug_frame,
-            text=f"項目数: {len(self.item_dictionary)}",
-            font=("", 8),
-            foreground="gray",
-        )
-        count_label.pack(anchor=tk.W, padx=5, pady=2)
+        if hasattr(self, "_debug_count_label") and self._debug_count_label.winfo_exists():
+            self._debug_count_label.config(text=f"項目数: {len(self.item_dictionary)}")
 
     def _populate_tree(self):
-        """ツリービューにデータを挿入"""
+        """ツリービューにデータを挿入（検索フィルタリングとソートを適用）"""
+        # 既存の項目をクリア
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        sorted_items = sorted(self.item_dictionary.items(), key=lambda x: x[0])
-        for key, data in sorted_items:
+        # 検索フィルタリング
+        search_text = self.search_var.get().strip().lower()
+        
+        # 全項目を取得
+        all_items = list(self.item_dictionary.items())
+        
+        # 検索フィルタリング
+        filtered_items = []
+        # 出生年・出生年月：alias が辞書に無くても検索でヒットするようフォールバック
+        _VIRTUAL_ALIAS = {"BTHYR": "出生年", "BTHYM": "出生年月"}
+        for key, data in all_items:
             origin = _get_origin(data)
             label = _get_label(data, key)
+            category = _get_category(data)
+            alias = (data.get("alias") or "").strip().lower()
+            virtual = (_VIRTUAL_ALIAS.get(key) or "").strip().lower()
+            search_lower = search_text.lower() if search_text else ""
+            match_alias = alias and search_lower and search_lower in alias
+            match_virtual = virtual and search_lower and search_lower in virtual
+            
+            # 検索フィルタリング（項目キー・表示名・カテゴリー・別名(alias)・仮の別名）
+            if search_text:
+                if (search_text not in key.lower() and
+                    search_text not in label.lower() and
+                    search_text not in category.lower() and
+                    not match_alias and
+                    not match_virtual):
+                    continue
+            
+            filtered_items.append((key, data))
+        
+        # ソート状態を確認
+        active_sort_column = None
+        active_sort_order = None
+        for col, state in self.sort_states.items():
+            if state is not None:
+                active_sort_column = col
+                active_sort_order = state
+                break
+        
+        # ソート適用
+        if active_sort_column and active_sort_order:
+            # ソート用のキー関数を定義
+            column_index_map = {
+                "key": 0,
+                "label": 1,
+                "category": 2,
+                "origin": 3,
+                "datatype": 4
+            }
+            col_idx = column_index_map.get(active_sort_column, 0)
+            
+            def get_sort_key(item):
+                key, data = item
+                origin = _get_origin(data)
+                label = _get_label(data, key)
+                category = _get_category(data)
+                datatype = _get_datatype(data)
+                
+                values = (key, label, category, origin, datatype)
+                value = values[col_idx] if col_idx < len(values) else ""
+                
+                # 数値として比較できる場合は数値に変換
+                try:
+                    return (0, value) if isinstance(value, (int, float)) else (1, str(value).lower())
+                except (ValueError, TypeError):
+                    return (1, str(value).lower())
+            
+            reverse = (active_sort_order == 'desc')
+            filtered_items = sorted(filtered_items, key=get_sort_key, reverse=reverse)
+        elif active_sort_column is None:
+            # 元の順序に戻す（項目キー順）
+            filtered_items = sorted(filtered_items, key=lambda x: self.original_order.index(x[0]) if x[0] in self.original_order else len(self.original_order))
+        
+        # Treeviewに表示
+        filtered_count = 0
+        for key, data in filtered_items:
+            origin = _get_origin(data)
+            label = _get_label(data, key)
+            category = _get_category(data)
             datatype = _get_datatype(data)
-            editable = "可" if _is_editable(data) else "不可"
-            tags = (origin,)
-            self.tree.insert("", tk.END, values=(key, label, origin, datatype, editable), tags=tags)
-            self._ensure_origin_tag(origin)
-
-    def _ensure_origin_tag(self, origin: str):
-        """originごとの色タグ設定"""
-        if not origin:
-            return
-        color = self.ORIGIN_COLORS.get(origin)
-        if color:
-            try:
-                self.tree.tag_configure(origin, foreground=color)
-            except tk.TclError:
-                pass
+            
+            self.tree.insert("", tk.END, values=(key, label, category, origin, datatype))
+            filtered_count += 1
+        
+        # ヘッダーにソートインジケーターを表示
+        self._update_column_headers()
+        
+        logger.info(f"[ItemDictionaryWindow] 表示した項目数: {filtered_count}")
 
     def _on_select(self, event=None):
         selection = self.tree.selection()
@@ -261,6 +417,8 @@ class ItemDictionaryWindow:
 
         def on_saved():
             self._reload_dictionary()
+            # normalization辞書を再生成
+            self._regenerate_normalization_dict()
         ItemEditorWindow(
             parent=self.window,
             item_key=key,
@@ -281,6 +439,8 @@ class ItemDictionaryWindow:
 
         def on_saved():
             self._reload_dictionary()
+            # normalization辞書を再生成
+            self._regenerate_normalization_dict()
         ItemFormulaWindow(
             parent=self.window,
             item_key=key,
@@ -308,10 +468,15 @@ class ItemDictionaryWindow:
                 item_dict = json.load(f)
             if key in item_dict:
                 del item_dict[key]
+                # フォルダが存在しない場合は作成
+                if self.item_dict_path:
+                    self.item_dict_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self.item_dict_path, "w", encoding="utf-8") as f:
                     json.dump(item_dict, f, ensure_ascii=False, indent=2)
                 messagebox.showinfo("完了", "項目を削除しました")
                 self._reload_dictionary()
+                # normalization辞書を再生成
+                self._regenerate_normalization_dict()
             else:
                 messagebox.showerror("エラー", f"{key} が見つかりません")
         except Exception as e:
@@ -325,6 +490,8 @@ class ItemDictionaryWindow:
 
         def on_saved():
             self._reload_dictionary()
+            # normalization辞書を再生成
+            self._regenerate_normalization_dict()
         ItemNewWindow(
             parent=self.window,
             item_dictionary_path=self.item_dict_path,
@@ -349,9 +516,9 @@ class ItemDictionaryWindow:
         lines = [
             f"項目キー: {key}",
             f"表示名: {_get_label(data, key)}",
+            f"カテゴリー: {_get_category(data)}",
             f"origin: {_get_origin(data)}",
             f"データ型: {_get_datatype(data)}",
-            f"編集可否: {'可' if _is_editable(data) else '不可'}",
         ]
         if data.get("description"):
             lines.append(f"説明: {data.get('description')}")
@@ -362,6 +529,25 @@ class ItemDictionaryWindow:
         self.detail_text.insert(1.0, "\n".join(lines))
         self.detail_text.config(state=tk.DISABLED)
 
+    def _on_search_changed(self):
+        """検索欄の変更時にフィルタリングを実行"""
+        self._populate_tree()
+        # 選択をクリア
+        self.tree.selection_remove(self.tree.selection())
+
+    def _clear_search(self):
+        """検索欄をクリア"""
+        self.search_var.set("")
+
+    def _regenerate_normalization_dict(self):
+        """normalization辞書を再生成"""
+        try:
+            from modules.normalization_generator import generate_normalization_dict
+            generate_normalization_dict()
+            logger.info("[ItemDictionaryWindow] normalization辞書を再生成しました")
+        except Exception as e:
+            logger.error(f"[ItemDictionaryWindow] normalization辞書の再生成に失敗: {e}")
+    
     def _reload_dictionary(self):
         """辞書を再読込して表示更新"""
         prev_selected = self.selected_item_key
@@ -393,6 +579,5 @@ class ItemDictionaryWindow:
     def show(self):
         """ウィンドウを表示"""
         self.window.focus_set()
-        self.window.grab_set()
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Callable
 
 from modules.farm_creator import FarmCreator
+from constants import FARMS_ROOT
 
 
 class FarmCreateWindow:
@@ -28,8 +29,6 @@ class FarmCreateWindow:
         self.window = tk.Toplevel(parent)
         self.window.title("新規農場作成")
         self.window.geometry("500x400")
-        self.window.transient(parent)
-        self.window.grab_set()
         
         # 変数
         self.farm_name_var = tk.StringVar()
@@ -133,13 +132,13 @@ class FarmCreateWindow:
     
     def _load_template_farms(self):
         """テンプレート農場リストをロード"""
-        farms_root = Path("C:/FARMS")
-        
+        farms_root = FARMS_ROOT
+
         if not farms_root.exists():
             self.template_combo['values'] = []
             return
-        
-        # C:/FARMS 配下のフォルダを取得
+
+        # FARMS_ROOT 配下のフォルダを取得
         farms = []
         for item in farms_root.iterdir():
             if item.is_dir():
@@ -171,8 +170,7 @@ class FarmCreateWindow:
             return
         
         # 農場パスを決定
-        farms_root = Path("C:/FARMS")
-        farm_path = farms_root / farm_name
+        farm_path = FARMS_ROOT / farm_name
         
         # 既存チェック
         if farm_path.exists() and (farm_path / "farm.db").exists():
@@ -195,7 +193,7 @@ class FarmCreateWindow:
         template_farm_path = None
         template_name = self.template_farm_var.get()
         if template_name and template_name != "（なし）":
-            template_farm_path = farms_root / template_name
+            template_farm_path = FARMS_ROOT / template_name
             if not (template_farm_path / "farm.db").exists():
                 messagebox.showerror("エラー", f"テンプレート農場が見つかりません: {template_farm_path}")
                 return
@@ -230,6 +228,43 @@ class FarmCreateWindow:
         """ウィンドウを表示"""
         self.window.wait_window()
         return self.created_farm_path
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
