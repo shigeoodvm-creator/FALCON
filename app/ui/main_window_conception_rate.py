@@ -45,19 +45,348 @@ logger = logging.getLogger(__name__)
 
 class ConceptionRateMixin:
     """Mixin: FALCON2 - 受胎率計算・表示 Mixin"""
-    def _execute_conception_rate_command(self):
+
+    def _execute_pregnancy_rate_command(self):
+        """妊娠率コマンドを実行（21日妊娠率: DairyComp305互換）"""
+        try:
+            # VWP取得
+            vwp_str = self.pregnancy_rate_vwp_var.get().strip() if hasattr(self, 'pregnancy_rate_vwp_var') else "50"
+            try:
+                vwp = int(vwp_str)
+                if vwp < 1:
+                    vwp = 50
+            except ValueError:
+                vwp = 50
+
+            # 期間取得
+            start_date = None
+            end_date = None
+            if hasattr(self, 'start_date_entry') and self.start_date_entry.winfo_exists():
+                s = self.start_date_entry.get().strip()
+                if s and not self.start_date_placeholder_shown:
+                    start_date = s
+            if hasattr(self, 'end_date_entry') and self.end_date_entry.winfo_exists():
+                e = self.end_date_entry.get().strip()
+                if e and not self.end_date_placeholder_shown:
+                    end_date = e
+
+            # 条件取得（現在は表示用のみ）
+            condition_text = ""
+            if hasattr(self, 'pregnancy_rate_condition_entry') and self.pregnancy_rate_condition_entry.winfo_exists():
+                if not self.pregnancy_rate_condition_placeholder_shown:
+                    condition_text = self.pregnancy_rate_condition_entry.get().strip()
+
+            period_text = f"{start_date} ～ {end_date}" if start_date and end_date else "全期間"
+            self.add_message(role="system", text=f"妊娠率を計算しています… VWP={vwp}日 / 期間: {period_text}")
+            self.result_notebook.select(0)  # 表タブを選択
+
+            def calculate_in_thread():
+                try:
+                    from modules.reproduction_analysis import ReproductionAnalysis
+                    analyzer = ReproductionAnalysis(
+                        db=self.db,
+                        rule_engine=self.rule_engine,
+                        formula_engine=self.formula_engine,
+                        vwp=vwp
+                    )
+                    results = analyzer.analyze(start_date, end_date)
+                    self.root.after(0, lambda: self._display_pregnancy_rate_result(
+                        results, vwp, period_text, condition_text
+                    ))
+                except Exception as ex:
+                    err = str(ex)
+                    logging.error(f"妊娠率計算エラー: {err}", exc_info=True)
+                    self.root.after(0, lambda msg=err: self.add_message(
+                        role="system", text=f"妊娠率の計算中にエラーが発生しました: {msg}"
+                    ))
+
+            thread = threading.Thread(target=calculate_in_thread, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            logging.error(f"妊娠率コマンド実行エラー: {e}", exc_info=True)
+            self.add_message(role="system", text=f"妊娠率の計算中にエラーが発生しました: {e}")
+
+    def _display_pregnancy_rate_result(self, results, vwp: int, period_text: str, condition_text: str):
+        """妊娠率結果を表とグラフで表示"""
+        try:
+            if not results:
+                self.add_message(role="system", text="該当するデータがありません")
+                return
+
+            headers = ["開始日", "終了日", "繁殖対象", "授精", "授精率%", "妊娠対象", "妊娠", "妊娠率%", "損耗"]
+            rows = []
+
+            total_br_el = 0
+            total_bred = 0
+            total_preg_eligible = 0
+            total_preg = 0
+            total_loss = 0
+
+            def fmt_date(d: str) -> str:
+                try:
+                    from datetime import datetime as _dt
+                    dt = _dt.strptime(d, '%Y-%m-%d')
+                    return f"{dt.month}/{dt.day}"
+                except Exception:
+                    return d
+
+            for r in results:
+                hdr_str = f"{int(r.hdr)}%" if r.br_el > 0 else "-"
+                pr_str = f"{int(r.pr)}%" if r.preg_eligible > 0 else "-"
+                rows.append([
+                    fmt_date(r.start_date),
+                    fmt_date(r.end_date),
+                    str(r.br_el),
+                    str(r.bred),
+                    hdr_str,
+                    str(r.preg_eligible) if r.preg_eligible > 0 else "-",
+                    str(r.preg) if r.preg_eligible > 0 else "-",
+                    pr_str,
+                    str(r.loss) if r.preg_eligible > 0 else "-",
+                ])
+                total_br_el += r.br_el
+                total_bred += r.bred
+                total_preg_eligible += r.preg_eligible
+                total_preg += r.preg
+                total_loss += r.loss
+
+            # 合計行
+            total_hdr_str = f"{round(total_bred / total_br_el * 100)}%" if total_br_el > 0 else "-"
+            total_pr_str = f"{round(total_preg / total_preg_eligible * 100)}%" if total_preg_eligible > 0 else "-"
+            rows.append([
+                "【合計】",
+                "",
+                str(total_br_el),
+                str(total_bred),
+                total_hdr_str,
+                str(total_preg_eligible) if total_preg_eligible > 0 else "-",
+                str(total_preg) if total_preg_eligible > 0 else "-",
+                total_pr_str,
+                str(total_loss) if total_preg_eligible > 0 else "-",
+            ])
+
+            title = f"妊娠率（21日サイクル）VWP={vwp}日"
+            if condition_text:
+                title = f"{title}：{condition_text}"
+            self._display_list_result_in_table(headers, rows, title, period=period_text)
+
+            # グラフ表示
+            if MATPLOTLIB_AVAILABLE:
+                self._display_pregnancy_rate_graph(results, title=title, period_text=period_text)
+
+        except Exception as e:
+            logging.error(f"妊娠率結果表示エラー: {e}", exc_info=True)
+            self.add_message(role="system", text=f"結果の表示中にエラーが発生しました: {e}")
+
+    def _display_pregnancy_rate_graph(self, results, title: str, period_text: str):
+        """
+        妊娠率・授精率の積み上げ棒グラフを別ウィンドウで表示。
+        ウィンドウ内に目標ライン入力欄を設置し、入力後「補助線を更新」で再描画できる。
+        """
+        try:
+            if not MATPLOTLIB_AVAILABLE or not results:
+                return
+
+            # 日本語フォント設定
+            try:
+                import matplotlib.font_manager as fm
+                for font_name in ['MS Gothic', 'MS PGothic', 'Yu Gothic', 'Meiryo']:
+                    try:
+                        if fm.findfont(fm.FontProperties(family=font_name)):
+                            plt.rcParams['font.family'] = font_name
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            def fmt_date(d: str) -> str:
+                try:
+                    from datetime import datetime as _dt
+                    dt = _dt.strptime(d, '%Y-%m-%d')
+                    return f"{dt.month}/{dt.day}"
+                except Exception:
+                    return d
+
+            x_labels = [fmt_date(r.start_date) for r in results]
+            pr_vals = [r.pr for r in results]
+            hdr_vals = [r.hdr for r in results]
+            x = list(range(len(results)))
+
+            # 妊娠率 95%信頼区間（Wilson スコア法）
+            from math import sqrt as _sqrt
+            def _wilson_ci(preg, n):
+                if n == 0:
+                    return None, None
+                p = preg / n
+                z = 1.96
+                denom = 1 + z * z / n
+                center = (p + z * z / (2 * n)) / denom
+                margin = z * _sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+                return max(0.0, (center - margin) * 100), min(100.0, (center + margin) * 100)
+
+            _ci_lo, _ci_hi = [], []
+            for r in results:
+                lo, hi = _wilson_ci(r.preg, r.preg_eligible)
+                _ci_lo.append(lo if lo is not None else r.pr)
+                _ci_hi.append(hi if hi is not None else r.pr)
+            _yerr_lo = [max(0.0, p - lo) for p, lo in zip(pr_vals, _ci_lo)]
+            _yerr_hi = [max(0.0, hi - p) for p, hi in zip(pr_vals, _ci_hi)]
+
+            # ---- ウィンドウ構築 ----
+            graph_win = tk.Toplevel(self.root)
+            full_title = f"{title} | {period_text}" if period_text else title
+            graph_win.title(full_title)
+            graph_win.transient(self.root)
+
+            self.root.update_idletasks()
+            _win_w, _win_h = 920, 620
+            _screen_w = self.root.winfo_screenwidth()
+            _screen_h = self.root.winfo_screenheight()
+            _gx = self.root.winfo_x() + int(self.root.winfo_width() * 0.45)
+            _gy = self.root.winfo_y() + 180
+            if _gx + _win_w > _screen_w:
+                _gx = max(0, _screen_w - _win_w - 10)
+            if _gy + _win_h > _screen_h:
+                _gy = max(0, _screen_h - _win_h - 40)
+            graph_win.geometry(f"{_win_w}x{_win_h}+{_gx}+{_gy}")
+
+            # タイトルラベル
+            tk.Label(
+                graph_win,
+                text=full_title,
+                font=(getattr(self, '_main_font_family', 'Meiryo UI'), 9),
+                anchor=tk.W
+            ).pack(fill=tk.X, padx=10, pady=(6, 0))
+
+            # matplotlib キャンバス
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            figure = Figure(figsize=(11, 4.8), dpi=95)
+            canvas = FigureCanvasTkAgg(figure, graph_win)
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=(6, 2))
+
+            # ---- 補助線コントロールパネル ----
+            ctrl_frame = ttk.LabelFrame(graph_win, text="目標補助線（0 = 非表示）")
+            ctrl_frame.pack(fill=tk.X, padx=10, pady=(2, 8))
+
+            _font = (getattr(self, '_main_font_family', 'Meiryo UI'), 9)
+
+            ttk.Label(ctrl_frame, text="妊娠率 目標%:", font=_font).pack(side=tk.LEFT, padx=(12, 4))
+            pr_target_var = tk.StringVar(value="0")
+            pr_spin = ttk.Spinbox(ctrl_frame, from_=0, to=100, textvariable=pr_target_var,
+                                  width=5, font=_font)
+            pr_spin.pack(side=tk.LEFT, padx=(0, 16))
+
+            ttk.Label(ctrl_frame, text="授精率 目標%:", font=_font).pack(side=tk.LEFT, padx=(0, 4))
+            hdr_target_var = tk.StringVar(value="0")
+            hdr_spin = ttk.Spinbox(ctrl_frame, from_=0, to=100, textvariable=hdr_target_var,
+                                   width=5, font=_font)
+            hdr_spin.pack(side=tk.LEFT, padx=(0, 16))
+
+            ttk.Label(ctrl_frame, text="← 値を入力して「補助線を更新」を押してください",
+                      font=(_font[0], _font[1] - 1), foreground='gray').pack(side=tk.LEFT, padx=(0, 12))
+
+            update_btn = ttk.Button(ctrl_frame, text="補助線を更新")
+            update_btn.pack(side=tk.LEFT, padx=(0, 12))
+
+            ttk.Separator(ctrl_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=4)
+            ttk.Button(ctrl_frame, text="📋 クリップボードにコピー",
+                       command=lambda: self._copy_figure_to_clipboard(figure)).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(ctrl_frame, text="💾 画像を保存",
+                       command=lambda: self._save_figure_as_file(figure)).pack(side=tk.LEFT, padx=(0, 6))
+
+            # ---- 描画関数 ----
+            def draw(pr_target: float = 0, hdr_target: float = 0):
+                figure.clear()
+                ax = figure.add_subplot(111)
+                hdr_above = [max(0.0, h - p) for h, p in zip(hdr_vals, pr_vals)]
+
+                bar_w = 0.6
+                ax.bar(x, pr_vals, width=bar_w, color='#1565c0', label='妊娠率', zorder=3)
+                ax.bar(x, hdr_above, width=bar_w, bottom=pr_vals,
+                       color='#90caf9', label='授精率（妊娠率との差）', zorder=3)
+
+                # 妊娠率 95%信頼区間 エラーバー
+                ax.errorbar(x, pr_vals,
+                            yerr=[_yerr_lo, _yerr_hi],
+                            fmt='none', color='#0d47a1', linewidth=1.4,
+                            capsize=0, zorder=5, label='妊娠率 95%信頼区間')
+
+                for i, (p, h) in enumerate(zip(pr_vals, hdr_vals)):
+                    if h > 0:
+                        ax.text(i, h + 0.6, f"{int(h)}%",
+                                ha='center', va='bottom', fontsize=7, color='#0d47a1')
+                    if p > 0:
+                        ax.text(i, p / 2, f"{int(p)}%",
+                                ha='center', va='center', fontsize=7,
+                                color='white', fontweight='bold')
+
+                if pr_target > 0:
+                    ax.axhline(pr_target, color='#0d47a1', linestyle='--', linewidth=2,
+                               label=f'妊娠率目標 {int(pr_target)}%', zorder=5)
+                    ax.text(len(x) - 0.5, pr_target + 0.6,
+                            f"目標 {int(pr_target)}%", color='#0d47a1',
+                            fontsize=8, va='bottom', ha='right', zorder=6)
+                if hdr_target > 0:
+                    ax.axhline(hdr_target, color='#e65100', linestyle='--', linewidth=2,
+                               label=f'授精率目標 {int(hdr_target)}%', zorder=5)
+                    ax.text(len(x) - 0.5, hdr_target + 0.6,
+                            f"目標 {int(hdr_target)}%", color='#e65100',
+                            fontsize=8, va='bottom', ha='right', zorder=6)
+
+                ax.set_xticks(x)
+                ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
+                ax.set_xlabel("サイクル開始日", fontsize=10)
+                ax.set_ylabel("%", fontsize=10)
+                ax.set_title(full_title, fontsize=10, fontweight='bold', pad=8)
+                y_max_data = max((max(hdr_vals) if hdr_vals else 0), pr_target, hdr_target)
+                ax.set_ylim(0, max(100, y_max_data * 1.15))
+                ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+                ax.set_axisbelow(True)
+                ax.legend(loc='upper left', fontsize=8)
+
+                try:
+                    figure.tight_layout()
+                except Exception:
+                    pass
+                canvas.draw()
+
+            def on_update(_event=None):
+                try:
+                    pr_t = float(pr_target_var.get() or 0)
+                except ValueError:
+                    pr_t = 0
+                try:
+                    hdr_t = float(hdr_target_var.get() or 0)
+                except ValueError:
+                    hdr_t = 0
+                draw(pr_t, hdr_t)
+
+            update_btn.config(command=on_update)
+            pr_spin.bind('<Return>', on_update)
+            hdr_spin.bind('<Return>', on_update)
+
+            # 初期描画（補助線なし）
+            draw()
+
+        except Exception as e:
+            logging.error(f"妊娠率グラフ表示エラー: {e}", exc_info=True)
+
+    def _execute_conception_rate_command(self, cow_type: str = "経産"):
         """受胎率コマンドを実行"""
         try:
             # 受胎率の種類を取得
             if not hasattr(self, 'conception_rate_type_entry') or not self.conception_rate_type_entry.winfo_exists():
                 self.add_message(role="system", text="受胎率の種類が選択されていません")
                 return
-            
+
             rate_type = self.conception_rate_type_var.get().strip()
             if not rate_type:
                 self.add_message(role="system", text="受胎率の種類を選択してください")
                 return
-            
+
             # 期間を取得
             start_date = None
             end_date = None
@@ -68,22 +397,22 @@ class ConceptionRateMixin:
                     start_date = start_date_str
                 if end_date_str and end_date_str != "YYYY-MM-DD":
                     end_date = end_date_str
-            
+
             # 条件を取得
             condition_text = ""
             if hasattr(self, 'conception_rate_condition_entry') and self.conception_rate_condition_entry.winfo_exists():
                 condition_text = self.conception_rate_condition_entry.get().strip()
                 if condition_text == self.conception_rate_condition_placeholder:
                     condition_text = ""
-            
+
             # ワーカースレッドで計算を実行
             self.result_notebook.select(0)  # 表タブを選択
-            
+
             def calculate_in_thread():
                 try:
                     # self.dbを直接使用（既に初期化済み）
                     result = self._calculate_conception_rate(
-                        self.db, rate_type, start_date, end_date, condition_text
+                        self.db, rate_type, start_date, end_date, condition_text, cow_type=cow_type
                     )
                     if result:
                         # 期間情報を文字列化
@@ -95,11 +424,11 @@ class ConceptionRateMixin:
                     error_msg = str(e)  # 例外メッセージを変数に保存
                     logging.error(f"受胎率計算エラー: {error_msg}", exc_info=True)
                     self.root.after(0, lambda msg=error_msg: self.add_message(role="system", text=f"受胎率の計算中にエラーが発生しました: {msg}"))
-            
+
             import threading
             thread = threading.Thread(target=calculate_in_thread, daemon=True)
             thread.start()
-            
+
         except Exception as e:
             logging.error(f"受胎率コマンド実行エラー: {e}", exc_info=True)
             self.add_message(role="system", text=f"受胎率コマンドの実行中にエラーが発生しました: {e}")
@@ -356,10 +685,12 @@ class ConceptionRateMixin:
             pass
         return False
 
-    def _calculate_conception_rate(self, db, rate_type: str, start_date: Optional[str], 
-                                   end_date: Optional[str], condition_text: str) -> Optional[Dict[str, Any]]:
+    def _calculate_conception_rate(self, db, rate_type: str, start_date: Optional[str],
+                                   end_date: Optional[str], condition_text: str,
+                                   cow_type: str = "経産") -> Optional[Dict[str, Any]]:
         """
         受胎率を計算。
+        cow_type: '経産'（lact>=1）または '未経産'（lact==0）
         その他 = ①授精種類コードR（連続授精）および7日以内間隔のAI/ET + ②妊娠鑑定日数経過にもかかわらずO/P/Rいずれも未記録（未鑑定）。
         再授精の扱い: 8日以上あいた後のAI/ETがあれば、その前の授精は空胎確定（O）とする。Rは授精間隔7日以内の場合のみ（1つの授精として扱う）。
         ＊は②が存在する場合のみ表示。①は＊対象外。
@@ -408,10 +739,15 @@ class ConceptionRateMixin:
                 if not cow:
                     continue
                 
-                # 経産牛のみ（LACT>=1）を対象とする
+                # 経産/未経産フィルタ
                 lact = cow.get('lact')
-                if lact is None or lact < 1:
-                    continue
+                if cow_type == "未経産":
+                    if lact is None or lact != 0:
+                        continue
+                else:
+                    # 経産牛のみ（LACT>=1）を対象とする
+                    if lact is None or lact < 1:
+                        continue
                 
                 # 条件チェック
                 if condition_text:
@@ -612,6 +948,7 @@ class ConceptionRateMixin:
                 'start_date': start_date,
                 'end_date': end_date,
                 'condition_text': condition_text,
+                'cow_type': cow_type,
                 'stats': classification_stats
             }
             
@@ -1049,7 +1386,8 @@ class ConceptionRateMixin:
             
             # 表を表示（条件をタイトルに追加）
             condition_text = result.get('condition_text', '')
-            title = f"受胎率（経産）（{rate_type}別）"
+            cow_type_label = result.get('cow_type', '経産')
+            title = f"受胎率（{cow_type_label}）（{rate_type}別）"
             if condition_text:
                 title = f"{title}：{condition_text}"
             self._display_list_result_in_table(headers, rows, title, period=period)
@@ -1166,9 +1504,9 @@ class ConceptionRateMixin:
             # グラフ表示用のデータを保存
             self.current_graph_data = graph_data
             self.current_graph_command = f"受胎率（経産）（{rate_type}別）"
-            
-            # グラフタブが存在する場合はグラフを表示
-            if hasattr(self, 'graph_canvas') and self.graph_canvas and MATPLOTLIB_AVAILABLE:
+
+            # グラフをウィンドウで表示
+            if MATPLOTLIB_AVAILABLE:
                 self._draw_conception_rate_graph(graph_data)
                 
         except Exception as e:
@@ -1176,16 +1514,15 @@ class ConceptionRateMixin:
     
     def _draw_conception_rate_graph(self, graph_data: Dict[str, Any]):
         """
-        受胎率の結果をグラフ表示（新規ウィンドウ）
-        
+        受胎率の結果を別ウィンドウ（メイン画面の右側）に表示
+
         Args:
             graph_data: グラフ表示用のデータ
         """
         try:
             if not MATPLOTLIB_AVAILABLE:
-                logging.warning("[グラフ] matplotlibが利用できません")
                 return
-            
+
             x_labels = graph_data.get('x_axis', [])
             y_values = graph_data.get('y_axis', [])
             title = graph_data.get('title', '受胎率')
@@ -1193,115 +1530,98 @@ class ConceptionRateMixin:
             y_label = graph_data.get('y_label', '受胎率（%）')
             period = graph_data.get('period', '')
             command = self.current_graph_command or title
-            
+
             if not x_labels or not y_values:
-                logging.warning("[グラフ] グラフ表示用のデータがありません")
                 return
-            
-            # 新しいウィンドウを作成
-            graph_window = tk.Toplevel(self.root)
-            graph_window.title(f"グラフ: {title}")
-            graph_window.geometry("800x600")
-            
-            # コマンド表示
-            command_text = f"コマンド: {command}"
-            if period:
-                command_text += f" | 対象期間：{period}"
-            
-            command_label = tk.Label(
-                graph_window,
-                text=command_text,
-                font=(self._main_font_family, 9),
-                anchor=tk.W
-            )
-            command_label.pack(fill=tk.X, padx=10, pady=5)
-            
-            # matplotlib FigureとCanvasを作成
-            figure = Figure(figsize=(10, 6), dpi=100)
-            canvas = FigureCanvasTkAgg(figure, graph_window)
-            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            
+
             # 日本語フォントの設定
             try:
-                import matplotlib.pyplot as plt
                 import matplotlib.font_manager as fm
-                
-                # Windowsで利用可能な日本語フォントを探す
                 japanese_fonts = ['MS Gothic', 'MS PGothic', 'Yu Gothic', 'Meiryo', 'Takao']
-                font_found = None
                 for font_name in japanese_fonts:
                     try:
-                        font_path = fm.findfont(fm.FontProperties(family=font_name))
-                        if font_path:
-                            font_found = font_name
+                        if fm.findfont(fm.FontProperties(family=font_name)):
+                            plt.rcParams['font.family'] = font_name
                             break
-                    except:
+                    except Exception:
                         continue
-                
-                if font_found:
-                    plt.rcParams['font.family'] = font_found
-                    logging.debug(f"[グラフ] 日本語フォントを設定: {font_found}")
-                else:
-                    logging.warning("[グラフ] 日本語フォントが見つかりません")
-            except Exception as e:
-                logging.warning(f"[グラフ] フォント設定エラー: {e}")
-            
-            # グラフを作成
+            except Exception:
+                pass
+
+            # グラフウィンドウをメイン画面の右側に配置
+            graph_win = tk.Toplevel(self.root)
+            full_title = f"{title} | 対象期間：{period}" if period else title
+            graph_win.title(full_title)
+            graph_win.transient(self.root)
+
+            self.root.update_idletasks()
+            _win_w, _win_h = 800, 620
+            _screen_w = self.root.winfo_screenwidth()
+            _screen_h = self.root.winfo_screenheight()
+            # メイン画面の右半分に重ねて配置（表が左側に見えるように）
+            _gx = self.root.winfo_x() + int(self.root.winfo_width() * 0.45)
+            _gy = self.root.winfo_y() + 200
+            # 画面外にはみ出す場合は補正
+            if _gx + _win_w > _screen_w:
+                _gx = max(0, _screen_w - _win_w - 10)
+            if _gy + _win_h > _screen_h:
+                _gy = max(0, _screen_h - _win_h - 40)
+            graph_win.geometry(f"{_win_w}x{_win_h}+{_gx}+{_gy}")
+
+            # コマンド表示
+            cmd_text = f"コマンド: {command}"
+            if period:
+                cmd_text += f" | 対象期間：{period}"
+            tk.Label(
+                graph_win, text=cmd_text,
+                font=(getattr(self, '_main_font_family', 'Meiryo UI'), 9),
+                anchor=tk.W
+            ).pack(fill=tk.X, padx=10, pady=(6, 0))
+
+            # matplotlib Figure
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            figure = Figure(figsize=(10, 6), dpi=100)
+            canvas = FigureCanvasTkAgg(figure, graph_win)
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
             ax = figure.add_subplot(111)
-            
-            # 棒グラフを作成
-            bars = ax.bar(range(len(x_labels)), y_values, color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
-            
-            # X軸のティック位置とラベルを設定
+            bars = ax.bar(range(len(x_labels)), y_values,
+                          color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
             ax.set_xticks(range(len(x_labels)))
             ax.set_xticklabels(x_labels, rotation=45, ha='right')
-            
-            # 各棒の上に値を表示
-            for i, (bar, value) in enumerate(zip(bars, y_values)):
+
+            for bar, value in zip(bars, y_values):
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width() / 2., height,
-                       f'{value:.1f}%',
-                       ha='center', va='bottom', fontsize=9)
-            
-            # タイトルとラベルを設定
-            full_title = title
-            if period:
-                full_title = f"{title} | 対象期間：{period}"
+                        f'{value:.1f}%', ha='center', va='bottom', fontsize=9)
+
             ax.set_title(full_title, fontsize=12, fontweight='bold', pad=15)
             ax.set_xlabel(x_label, fontsize=11, fontweight='bold')
             ax.set_ylabel(y_label, fontsize=11, fontweight='bold')
-            
-            # グリッドを追加
             ax.grid(True, linestyle='--', alpha=0.3, axis='y')
             ax.set_axisbelow(True)
-            
-            # Y軸の範囲を設定（0-100%）
             y_max = max(y_values) if y_values else 100
             ax.set_ylim(0, max(100, y_max * 1.2))
-            
-            # レイアウトを調整
-            figure.tight_layout()
+
+            try:
+                figure.tight_layout()
+            except Exception:
+                pass
+
             canvas.draw()
-            
             logging.info(f"[グラフ] 受胎率グラフ描画完了: {len(x_labels)}件のデータを表示")
-            
+
+            _btn_frame = ttk.Frame(graph_win)
+            _btn_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+            _bf = (getattr(self, '_main_font_family', 'Meiryo UI'), 9)
+            ttk.Button(_btn_frame, text="📋 クリップボードにコピー",
+                       command=lambda: self._copy_figure_to_clipboard(figure)).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(_btn_frame, text="💾 画像を保存",
+                       command=lambda: self._save_figure_as_file(figure)).pack(side=tk.LEFT, padx=(0, 6))
+
         except Exception as e:
             logging.error(f"[グラフ] 受胎率グラフ表示エラー: {e}", exc_info=True)
-            import traceback
-            traceback.print_exc()
-            # エラー時も何か表示する
-            try:
-                if 'graph_window' in locals():
-                    error_label = tk.Label(
-                        graph_window,
-                        text=f"グラフ表示エラー: {str(e)[:100]}",
-                        font=(self._main_font_family, 10),
-                        fg='red',
-                        wraplength=700
-                    )
-                    error_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            except Exception as e2:
-                logging.error(f"[グラフ] エラー表示も失敗: {e2}")
     
     def _on_conception_rate_cell_double_click(self, event):
         """受胎率結果テーブルのセルをダブルクリックした時の処理"""
@@ -1565,4 +1885,428 @@ class ConceptionRateMixin:
             logging.error(f"受胎率イベントリスト表示エラー: {e}", exc_info=True)
             from tkinter import messagebox
             messagebox.showerror("エラー", f"イベントリストの表示中にエラーが発生しました: {e}")
-    
+
+    # ------------------------------------------------------------------
+    # 妊娠率（DIM別）
+    # ------------------------------------------------------------------
+
+    def _execute_pregnancy_rate_dim_command(self):
+        """DIMレンジ別妊娠率コマンドを実行（DC305 Bredsumer互換）"""
+        try:
+            # VWP取得
+            vwp_str = self.pregnancy_rate_vwp_var.get().strip() if hasattr(self, 'pregnancy_rate_vwp_var') else "50"
+            try:
+                vwp = int(vwp_str)
+                if vwp < 1:
+                    vwp = 50
+            except ValueError:
+                vwp = 50
+
+            # 期間取得
+            start_date = None
+            end_date = None
+            if hasattr(self, 'start_date_entry') and self.start_date_entry.winfo_exists():
+                s = self.start_date_entry.get().strip()
+                if s and not self.start_date_placeholder_shown:
+                    start_date = s
+            if hasattr(self, 'end_date_entry') and self.end_date_entry.winfo_exists():
+                e = self.end_date_entry.get().strip()
+                if e and not self.end_date_placeholder_shown:
+                    end_date = e
+
+            period_text = f"{start_date} ～ {end_date}" if start_date and end_date else "全期間"
+            self.add_message(role="system", text=f"妊娠率（DIM別）を計算しています… VWP={vwp}日 / 期間: {period_text}")
+            self.result_notebook.select(0)
+
+            def calculate_in_thread():
+                try:
+                    from modules.reproduction_analysis import ReproductionAnalysis
+                    analyzer = ReproductionAnalysis(
+                        db=self.db,
+                        rule_engine=self.rule_engine,
+                        formula_engine=self.formula_engine,
+                        vwp=vwp
+                    )
+                    results = analyzer.analyze_by_dim(start_date, end_date)
+                    self.root.after(0, lambda: self._display_pregnancy_rate_dim_result(
+                        results, vwp, period_text
+                    ))
+                except Exception as ex:
+                    err = str(ex)
+                    logging.error(f"妊娠率（DIM別）計算エラー: {err}", exc_info=True)
+                    self.root.after(0, lambda msg=err: self.add_message(
+                        role="system", text=f"妊娠率（DIM別）の計算中にエラーが発生しました: {msg}"
+                    ))
+
+            thread = threading.Thread(target=calculate_in_thread, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            logging.error(f"妊娠率（DIM別）コマンド実行エラー: {e}", exc_info=True)
+            self.add_message(role="system", text=f"妊娠率（DIM別）の計算中にエラーが発生しました: {e}")
+
+    def _display_pregnancy_rate_dim_result(self, results, vwp: int, period_text: str):
+        """DIMレンジ別妊娠率結果を表とグラフで表示"""
+        try:
+            if not results:
+                self.add_message(role="system", text="該当するデータがありません")
+                return
+
+            def fmt_dim_range(dim_start: int, dim_end: int) -> str:
+                if dim_end == 9999:
+                    return f"DIM{dim_start}+"
+                return f"DIM{dim_start}-{dim_end}"
+
+            headers = ["DIMレンジ", "繁殖対象", "授精", "授精率%", "妊娠対象", "妊娠", "妊娠率%", "損耗"]
+            rows = []
+
+            total_br_el = 0
+            total_bred = 0
+            total_preg_eligible = 0
+            total_preg = 0
+            total_loss = 0
+
+            for r in results:
+                hdr_str = f"{int(r.hdr)}%" if r.br_el > 0 else "-"
+                pr_str = f"{int(r.pr)}%" if r.preg_eligible > 0 else "-"
+                rows.append([
+                    fmt_dim_range(r.dim_start, r.dim_end),
+                    str(r.br_el),
+                    str(r.bred),
+                    hdr_str,
+                    str(r.preg_eligible) if r.preg_eligible > 0 else "-",
+                    str(r.preg) if r.preg_eligible > 0 else "-",
+                    pr_str,
+                    str(r.loss) if r.preg_eligible > 0 else "-",
+                ])
+                total_br_el += r.br_el
+                total_bred += r.bred
+                total_preg_eligible += r.preg_eligible
+                total_preg += r.preg
+                total_loss += r.loss
+
+            # 合計行
+            total_hdr_str = f"{round(total_bred / total_br_el * 100)}%" if total_br_el > 0 else "-"
+            total_pr_str = f"{round(total_preg / total_preg_eligible * 100)}%" if total_preg_eligible > 0 else "-"
+            rows.append([
+                "【合計】",
+                str(total_br_el),
+                str(total_bred),
+                total_hdr_str,
+                str(total_preg_eligible) if total_preg_eligible > 0 else "-",
+                str(total_preg) if total_preg_eligible > 0 else "-",
+                total_pr_str,
+                str(total_loss) if total_preg_eligible > 0 else "-",
+            ])
+
+            title = f"妊娠率（DIM別）VWP={vwp}日"
+            self._display_list_result_in_table(headers, rows, title, period=period_text)
+
+            if MATPLOTLIB_AVAILABLE:
+                self._display_pregnancy_rate_dim_graph(results, title=title, period_text=period_text)
+
+        except Exception as e:
+            logging.error(f"妊娠率（DIM別）結果表示エラー: {e}", exc_info=True)
+            self.add_message(role="system", text=f"結果の表示中にエラーが発生しました: {e}")
+
+    def _display_pregnancy_rate_dim_graph(self, results, title: str, period_text: str):
+        """DIMレンジ別妊娠率グラフ（DC305 Bredsumer スタイル）
+
+        - 積み上げ棒グラフ: 下=緑（Pregnancy Risk）、上=赤（Insemination Risk - PR）
+        - 黒エラーバー: PR 95%信頼区間（Wilson 法）
+        - 右Y軸・黒実線: Percent of Herd Still Open（累積空胎率）
+        """
+        try:
+            if not MATPLOTLIB_AVAILABLE or not results:
+                return
+
+            from math import sqrt
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            import matplotlib.patches as mpatches
+            import matplotlib.lines as mlines
+
+            # 日本語フォント設定
+            try:
+                import matplotlib.font_manager as fm
+                for _fn in ['Meiryo', 'MS Gothic', 'MS PGothic', 'Yu Gothic']:
+                    try:
+                        if fm.findfont(fm.FontProperties(family=_fn)):
+                            plt.rcParams['font.family'] = _fn
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # ── データ準備 ──────────────────────────────────────────────
+            # データがある（BR_EL > 0）レンジのみ対象
+            active = [r for r in results if r.br_el > 0]
+            if not active:
+                self.add_message(role="system", text="表示できるデータがありません（全レンジ BR_EL=0）")
+                return
+
+            # X位置: DIMレンジの中点（実DIM値でプロット）
+            x_mid = []
+            for r in active:
+                if r.dim_end == 9999:
+                    x_mid.append(float(r.dim_start + 10))
+                else:
+                    x_mid.append((r.dim_start + r.dim_end) / 2.0)
+
+            # 棒幅: DIMレンジ幅の80%
+            _range_w = 21  # デフォルト21日レンジ
+            if len(active) >= 2 and active[0].dim_end != 9999:
+                _range_w = active[0].dim_end - active[0].dim_start + 1
+            bar_w = _range_w * 0.80
+
+            pr_vals  = [r.pr  for r in active]
+            hdr_vals = [r.hdr for r in active]
+            # 赤部分 = HDR - PR（授精したが非妊娠）
+            red_vals = [max(0.0, h - p) for h, p in zip(hdr_vals, pr_vals)]
+
+            # PR 95%信頼区間（Wilson スコア法）
+            def _wilson_ci(preg: int, n: int):
+                if n == 0:
+                    return None, None
+                p = preg / n
+                z = 1.96
+                denom = 1 + z * z / n
+                center = (p + z * z / (2 * n)) / denom
+                margin = z * sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+                return max(0.0, (center - margin) * 100), min(100.0, (center + margin) * 100)
+
+            ci_lo, ci_hi = [], []
+            for r in active:
+                lo, hi = _wilson_ci(r.preg, r.preg_eligible)
+                ci_lo.append(lo if lo is not None else r.pr)
+                ci_hi.append(hi if hi is not None else r.pr)
+
+            yerr_lo = [max(0.0, p - lo) for p, lo in zip(pr_vals, ci_lo)]
+            yerr_hi = [max(0.0, hi - p) for p, hi in zip(pr_vals, ci_hi)]
+
+            # Percent of Herd Still Open（累積空胎率）
+            # 各レンジで妊娠した割合を乗算して残存率を計算
+            still_open = [100.0]
+            for r in active:
+                if r.preg_eligible > 0:
+                    p_preg = r.preg / r.preg_eligible
+                else:
+                    p_preg = 0.0
+                still_open.append(still_open[-1] * (1.0 - p_preg))
+
+            # Still Open の X 座標: 最初のレンジ開始 → 各レンジ終端
+            x_open = [float(active[0].dim_start)]
+            for r in active:
+                x_open.append(float(r.dim_end if r.dim_end != 9999 else r.dim_start + _range_w))
+
+            # ── ウィンドウ構築 ───────────────────────────────────────────
+            graph_win = tk.Toplevel(self.root)
+            full_title = f"{title} | {period_text}" if period_text else title
+            graph_win.title(full_title)
+            graph_win.transient(self.root)
+
+            self.root.update_idletasks()
+            _win_w, _win_h = 980, 600
+            _sw = self.root.winfo_screenwidth()
+            _sh = self.root.winfo_screenheight()
+            _gx = min(self.root.winfo_x() + int(self.root.winfo_width() * 0.45), _sw - _win_w - 10)
+            _gy = min(self.root.winfo_y() + 160, _sh - _win_h - 40)
+            graph_win.geometry(f"{_win_w}x{_win_h}+{max(0,_gx)}+{max(0,_gy)}")
+
+            # matplotlib キャンバス
+            figure = Figure(figsize=(11.5, 5.2), dpi=92)
+            mpl_canvas = FigureCanvasTkAgg(figure, graph_win)
+            mpl_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=(6, 2))
+
+            # 目標補助線フレーム
+            ctrl_frame = ttk.Frame(graph_win)
+            ctrl_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+            _font = (getattr(self, '_main_font_family', 'Meiryo UI'), 9)
+            ttk.Label(ctrl_frame, text="妊娠率 目標%:", font=_font).pack(side=tk.LEFT, padx=(12, 4))
+            pr_target_var = tk.StringVar(value="0")
+            ttk.Spinbox(ctrl_frame, from_=0, to=100, textvariable=pr_target_var,
+                        width=5, font=_font).pack(side=tk.LEFT, padx=(0, 10))
+            ttk.Label(ctrl_frame, text="授精率 目標%:", font=_font).pack(side=tk.LEFT, padx=(0, 4))
+            hdr_target_var = tk.StringVar(value="0")
+            ttk.Spinbox(ctrl_frame, from_=0, to=100, textvariable=hdr_target_var,
+                        width=5, font=_font).pack(side=tk.LEFT, padx=(0, 10))
+
+            # ── 描画関数 ─────────────────────────────────────────────────
+            def draw_graph():
+                figure.clear()
+                ax1 = figure.add_subplot(111)
+                ax2 = ax1.twinx()
+
+                # 積み上げ棒グラフ
+                # 下段: 深ブルー（妊娠率）
+                ax1.bar(x_mid, pr_vals, width=bar_w,
+                        color='#1565c0', label='妊娠率', zorder=3)
+                # 上段: 淡スカイブルー（授精率との差分）
+                ax1.bar(x_mid, red_vals, width=bar_w, bottom=pr_vals,
+                        color='#90caf9', label='授精率（差分）', zorder=3)
+
+                # 妊娠率 95%信頼区間 エラーバー（ネイビー）
+                ax1.errorbar(
+                    x_mid, pr_vals,
+                    yerr=[yerr_lo, yerr_hi],
+                    fmt='none', color='#0d47a1', linewidth=1.4,
+                    capsize=0, zorder=5, label='妊娠率 95%信頼区間'
+                )
+
+                # 空胎残存率（右Y軸・オレンジ実線）
+                ax2.plot(x_open, still_open,
+                         color='#e65100', linewidth=2.2,
+                         label='空胎残存率', zorder=6)
+
+                # 目標補助線
+                try:
+                    pt = int(pr_target_var.get())
+                    if pt > 0:
+                        ax1.axhline(pt, color='#0d47a1', linestyle='--',
+                                    linewidth=1.2, label=f'妊娠率目標 {pt}%')
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    ht = int(hdr_target_var.get())
+                    if ht > 0:
+                        ax1.axhline(ht, color='#e65100', linestyle='--',
+                                    linewidth=1.2, label=f'授精率目標 {ht}%')
+                except (ValueError, TypeError):
+                    pass
+
+                # ── 軸設定 ───────────────────────────────────────────────
+                ax1.set_xlabel('搾乳日数（DIM）', fontsize=10)
+                ax1.set_ylabel('割合（%）', fontsize=10)
+                ax1.set_ylim(0, 105)
+                ax1.yaxis.set_major_locator(plt.MultipleLocator(10))
+                ax1.grid(axis='y', alpha=0.35, zorder=0)
+
+                # 右Y軸（オレンジラベル）
+                _open_max = max(still_open) if still_open else 100
+                ax2.set_ylim(0, _open_max * 1.06)
+                ax2.set_ylabel('空胎残存率（%）',
+                               fontsize=9, color='#e65100', rotation=270, labelpad=14)
+                ax2.tick_params(axis='y', colors='#e65100', labelsize=8)
+                ax2.spines['right'].set_color('#e65100')
+                ax2.spines['right'].set_linewidth(1.2)
+
+                # X軸: 全体範囲を少し広げて見やすく
+                _x_min = max(0, (active[0].dim_start - _range_w * 1.5))
+                _last  = active[-1]
+                _x_max = (_last.dim_end if _last.dim_end != 9999 else _last.dim_start + _range_w * 2) + _range_w * 1.5
+                ax1.set_xlim(_x_min, _x_max)
+                ax2.set_xlim(_x_min, _x_max)
+
+                # X軸メモリ: 40日ごと
+                import numpy as _np
+                _xticks = _np.arange(
+                    int(_x_min // 40 + 1) * 40,
+                    int(_x_max // 40 + 1) * 40,
+                    40
+                )
+                ax1.set_xticks(_xticks)
+                ax1.tick_params(axis='x', labelsize=9)
+
+                # タイトル
+                ax1.set_title(full_title, fontsize=10, pad=8)
+
+                # 凡例（上部に1行で）
+                _leg_handles = [
+                    mpatches.Patch(color='#90caf9', label='授精率（差分）'),
+                    mlines.Line2D([], [], color='#0d47a1', linewidth=1.4, label='妊娠率 95%信頼区間'),
+                    mpatches.Patch(color='#1565c0', label='妊娠率'),
+                    mlines.Line2D([], [], color='#e65100', linewidth=2.2, label='空胎残存率'),
+                ]
+                ax1.legend(handles=_leg_handles, loc='upper center',
+                           bbox_to_anchor=(0.5, 1.13), ncol=4,
+                           fontsize=8.5, framealpha=0.9,
+                           handlelength=1.4, handleheight=0.9)
+
+                figure.tight_layout(rect=[0, 0, 1, 0.95])
+                mpl_canvas.draw()
+
+            draw_graph()
+
+            ttk.Button(ctrl_frame, text="補助線を更新",
+                       command=draw_graph).pack(side=tk.LEFT, padx=(10, 0))
+
+            ttk.Separator(ctrl_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=4)
+            ttk.Button(ctrl_frame, text="📋 クリップボードにコピー",
+                       command=lambda: self._copy_figure_to_clipboard(figure)).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(ctrl_frame, text="💾 画像を保存",
+                       command=lambda: self._save_figure_as_file(figure)).pack(side=tk.LEFT, padx=(0, 6))
+
+        except Exception as e:
+            logging.error(f"妊娠率（DIM別）グラフ表示エラー: {e}", exc_info=True)
+
+    # ─────────────────────────────────────────────────────────────────
+    #  グラフ ユーティリティ
+    # ─────────────────────────────────────────────────────────────────
+
+    def _copy_figure_to_clipboard(self, figure):
+        """matplotlib Figure を PNG 形式で Windows クリップボードにコピーする。
+        PowerShell / System.Windows.Forms 経由でコピーし、バックグラウンドスレッドで実行。
+        """
+        import os
+        import subprocess
+
+        def _do_copy():
+            tmp_path = None
+            try:
+                import tempfile
+                buf = io.BytesIO()
+                figure.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+                buf.seek(0)
+                fd, tmp_path = tempfile.mkstemp(suffix='.png')
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(buf.read())
+                # PowerShell で .NET クリップボードにコピー
+                ps_cmd = (
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "Add-Type -AssemblyName System.Drawing; "
+                    f"$img = [System.Drawing.Image]::FromFile('{tmp_path}'); "
+                    "[System.Windows.Forms.Clipboard]::SetImage($img); "
+                    "$img.Dispose();"
+                )
+                result = subprocess.run(
+                    ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
+                    timeout=20, capture_output=True
+                )
+                if result.returncode == 0:
+                    self.root.after(0, lambda: self.add_message(
+                        role="system", text="グラフをクリップボードにコピーしました。PowerPoint 等に貼り付けできます。"))
+                else:
+                    err = result.stderr.decode('utf-8', errors='replace').strip()
+                    logging.error(f"クリップボードコピーエラー: {err}")
+                    self.root.after(0, lambda: self.add_message(
+                        role="system", text=f"クリップボードへのコピーに失敗しました: {err[:120]}"))
+            except Exception as ex:
+                logging.error(f"_copy_figure_to_clipboard エラー: {ex}", exc_info=True)
+                self.root.after(0, lambda: self.add_message(
+                    role="system", text=f"クリップボードへのコピー中にエラーが発生しました: {ex}"))
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_do_copy, daemon=True).start()
+
+    def _save_figure_as_file(self, figure):
+        """matplotlib Figure をファイルダイアログ経由で PNG / SVG として保存する。"""
+        file_path = filedialog.asksaveasfilename(
+            title="グラフを保存",
+            defaultextension=".png",
+            filetypes=[("PNG 画像", "*.png"), ("SVG ベクター", "*.svg"), ("全てのファイル", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            fmt = 'svg' if file_path.lower().endswith('.svg') else 'png'
+            figure.savefig(file_path, format=fmt, dpi=150, bbox_inches='tight', facecolor='white')
+            self.add_message(role="system", text=f"グラフを保存しました: {file_path}")
+        except Exception as ex:
+            logging.error(f"_save_figure_as_file エラー: {ex}", exc_info=True)
+            self.add_message(role="system", text=f"グラフの保存中にエラーが発生しました: {ex}")

@@ -432,6 +432,10 @@ class CowCard:
             self.basic_labels[key] = value_label
             if key == "cow_id":
                 value_label.bind("<Double-Button-1>", self._on_edit_cow_id)
+            elif key == "jpn10":
+                value_label.config(cursor="hand2")
+                value_label.bind("<Button-1>", self._on_copy_jpn10)
+                value_label.bind("<Button-3>", self._on_copy_jpn10_menu)
             elif key == "brd":
                 value_label.bind("<Double-Button-1>", self._on_edit_brd)
                 value_label.bind("<Button-3>", lambda e, k=key: self._on_basic_right_click(k, e))
@@ -1923,6 +1927,29 @@ class CowCard:
         # 念のため存在チェックを追加（削除された項目はそのまま文字列として表示）
         # その他の項目も 0 / 0.0 を含めて表示
         return str(value)
+
+    def _on_copy_jpn10(self, _event=None):
+        """個体識別番号（JPN10）をクリップボードにコピー"""
+        jpn10 = self.basic_labels['jpn10'].cget('text')
+        if not jpn10:
+            return
+        self.frame.clipboard_clear()
+        self.frame.clipboard_append(jpn10)
+        # コピー完了フィードバック（1.5秒後に元の色に戻す）
+        lbl = self.basic_labels['jpn10']
+        lbl.config(foreground='green')
+        self.frame.after(1500, lambda: lbl.config(foreground='blue'))
+
+    def _on_copy_jpn10_menu(self, event):
+        """個体識別番号（JPN10）の右クリックメニュー"""
+        jpn10 = self.basic_labels['jpn10'].cget('text')
+        menu = tk.Menu(self.frame, tearoff=0)
+        menu.add_command(
+            label=f"「{jpn10}」をコピー" if jpn10 else "コピー（番号なし）",
+            command=self._on_copy_jpn10,
+            state="normal" if jpn10 else "disabled"
+        )
+        menu.post(event.x_root, event.y_root)
 
     def _on_basic_right_click(self, key: str, event):
         """基本情報の品種・群で右クリック時：編集・追加メニューを表示"""

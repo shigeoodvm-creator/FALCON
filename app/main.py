@@ -180,7 +180,22 @@ def main(cow_id: Optional[str] = None):
             logger.warning(f"イベント産次同期でエラー（続行）: {e}")
         
         logger.info("メインウィンドウを表示しました")
-        
+
+        # ========== 月次チェック（長期空胎牛 → 分娩過期牛の順に表示） ==========
+        def _run_monthly_checks():
+            try:
+                from modules.long_open_alert import show_alert_window as _open_alert
+                _open_alert(root, farm_path, db_handler, formula_engine, rule_engine)
+            except Exception as e:
+                logger.warning(f"長期空胎牛チェックをスキップ: {e}")
+            try:
+                from modules.overdue_calving_alert import show_alert_window as _calv_alert
+                _calv_alert(root, farm_path, db_handler, formula_engine, rule_engine)
+            except Exception as e:
+                logger.warning(f"分娩過期チェックをスキップ: {e}")
+
+        root.after(1500, _run_monthly_checks)
+
         # 個体IDが指定されている場合は、個体カードウィンドウを開く
         if cow_id:
             _open_cow_card_window(root, db_handler, formula_engine, rule_engine, farm_path, cow_id)

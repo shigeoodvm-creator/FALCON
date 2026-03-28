@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Callable, Dict, Any, Optional, List, Tuple
 import pandas as pd
 import logging
 import subprocess
@@ -22,7 +22,14 @@ logger = logging.getLogger(__name__)
 class MilkTestImportWindow:
     """乳検データ取り込みウィンドウ"""
     
-    def __init__(self, parent: tk.Tk, db_handler: DBHandler, rule_engine: RuleEngine):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        db_handler: DBHandler,
+        rule_engine: RuleEngine,
+        farm_path: Path,
+        on_complete: Optional[Callable] = None,
+    ):
         """
         初期化
         
@@ -30,10 +37,13 @@ class MilkTestImportWindow:
             parent: 親ウィンドウ
             db_handler: DBHandler インスタンス
             rule_engine: RuleEngine インスタンス
+            farm_path: 農場フォルダパス（導入画面用）
         """
         self.parent = parent
         self.db = db_handler
         self.rule_engine = rule_engine
+        self.farm_path = Path(farm_path)
+        self.on_complete = on_complete
         
         self.window = tk.Toplevel(parent)
         self.window.title("乳検データ取り込み")
@@ -154,7 +164,7 @@ class MilkTestImportWindow:
             test_date = None
             if len(df) > 3:
                 date_str = df.iloc[3, 0] if len(df.columns) > 0 else None
-                if pd.notna(date_str):
+                if date_str is not None and str(date_str).strip():
                     date_str = str(date_str).strip()
                     try:
                         date_obj = datetime.strptime(date_str, '%Y/%m/%d')
@@ -199,9 +209,55 @@ class MilkTestImportWindow:
                 for char in col_name:
                     result = result * 26 + (ord(char.upper()) - ord('A') + 1)
                 return result - 1
-            
-            col_jpn10 = 0
-            col_cow_id = 1
+
+            def normalize_jpn10(value: Any) -> Optional[str]:
+                """個体識別番号（10桁）を正規化（9桁の先頭0落ちを補正）"""
+                if value is None or (isinstance(value, float) and pd.isna(value)):
+                    return None
+                s = str(value).strip()
+                if not s:
+                    return None
+                digits = "".join(ch for ch in s if ch.isdigit())
+                if len(digits) == 9:
+                    return digits.zfill(10)
+                if len(digits) == 10:
+                    return digits
+                return None
+
+            def normalize_ymd(value: Any) -> Optional[str]:
+                """YYYY/MM/DD -> YYYY-MM-DD"""
+                if value is None or (isinstance(value, float) and pd.isna(value)):
+                    return None
+                s = str(value).strip()
+                if not s:
+                    return None
+                for fmt in ["%Y/%m/%d", "%Y-%m-%d", "%Y%m%d"]:
+                    try:
+                        dt = datetime.strptime(s, fmt)
+                        return dt.strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
+                return None
+
+            def normalize_breed(raw: Any) -> str:
+                """品種（ホルスタイン/ジャージー/その他）へ正規化"""
+                if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                    return "ホルスタイン"
+                s = str(raw).strip()
+                if not s:
+                    return "ホルスタイン"
+                if "ホルスタイン" in s:
+                    return "ホルスタイン"
+                if "ジャージー" in s:
+                    return "ジャージー"
+                return "その他"
+
+            # ヘッダーから列位置を探索（見つからない場合は乳量等は既存のフォールバックで動く）
+            col_jpn10 = find_column_index(['個体識別番号', '10桁']) or 0
+            col_breed = find_column_index(['品種'])
+            col_birth_date = find_column_index(['生年月日'])
+            col_lact = find_column_index(['産次'])
+            col_clvd = find_column_index(['分娩年月日'])
             
             # ヘッダーから列位置を検索（当日値の列）
             col_milk_yield = find_column_index(['乳量', '当日']) or excel_col_to_index('D')
@@ -227,17 +283,16 @@ class MilkTestImportWindow:
                 if not any(pd.notna(val) and str(val).strip() for val in row[:5]):
                     continue
                 
-                jpn10 = str(row[col_jpn10]).strip() if len(row) > col_jpn10 and pd.notna(row[col_jpn10]) else None
-                if not jpn10 or len(jpn10) != 10 or not jpn10.isdigit():
+                jpn10 = None
+                if len(row) > col_jpn10:
+                    jpn10 = normalize_jpn10(row[col_jpn10])
+                if not jpn10:
                     continue
+
+                # cow_id は IntroductionWindow の仕様（JPN10の6-9桁目）へ統一
+                cow_id = jpn10[5:9].zfill(4)
                 
-                cow_id_4digit = str(row[col_cow_id]).strip() if len(row) > col_cow_id and pd.notna(row[col_cow_id]) else None
-                if cow_id_4digit and len(cow_id_4digit) >= 4:
-                    cow_id = cow_id_4digit[-4:]
-                else:
-                    cow_id = jpn10[-4:]
-                
-                def get_float_value(col_idx: int) -> Optional[float]:
+                def get_float_value(col_idx: Optional[int]) -> Optional[float]:
                     if col_idx is None or len(row) <= col_idx:
                         return None
                     val = row[col_idx]
@@ -248,7 +303,7 @@ class MilkTestImportWindow:
                             pass
                     return None
                 
-                def get_int_value(col_idx: int) -> Optional[int]:
+                def get_int_value(col_idx: Optional[int]) -> Optional[int]:
                     if col_idx is None or len(row) <= col_idx:
                         return None
                     val = row[col_idx]
@@ -275,10 +330,20 @@ class MilkTestImportWindow:
                 preformed_fa = get_float_value(col_preformed_fa)
                 mixed_fa = get_float_value(col_mixed_fa)
                 denovo_milk = get_float_value(col_denovo_milk)
+
+                # 導入イベント入力用の追加項目
+                lact = get_int_value(col_lact) if col_lact is not None else None
+                birth_date = normalize_ymd(row[col_birth_date]) if col_birth_date is not None and len(row) > col_birth_date else None
+                clvd = normalize_ymd(row[col_clvd]) if col_clvd is not None and len(row) > col_clvd else None
+                breed = normalize_breed(row[col_breed]) if col_breed is not None and len(row) > col_breed else "ホルスタイン"
                 
                 data_rows.append({
                     'cow_id': cow_id,
                     'jpn10': jpn10,
+                    'breed': breed,
+                    'birth_date': birth_date,
+                    'lact': lact,
+                    'clvd': clvd,
                     'milk_yield': milk_yield,
                     'fat': fat,
                     'protein': protein,
@@ -359,6 +424,8 @@ class MilkTestImportWindow:
         for row_data in self.data_rows:
             cow_id = row_data.get('cow_id')
             jpn10 = row_data.get('jpn10')
+            if not isinstance(cow_id, str) or not isinstance(jpn10, str):
+                continue
             
             # 個体を検索
             cow = self.db.get_cow_by_id(cow_id)
@@ -372,16 +439,69 @@ class MilkTestImportWindow:
                     cow = None
             
             if not cow:
+                # 個体不足時は「導入(600)」で自動入力→ユーザー登録後に乳検(601)を作成
+                cow_created = False
+                try:
+                    from ui.introduction_window import IntroductionWindow
+
+                    intro_window = IntroductionWindow(
+                        parent=self.window,  # type: ignore[arg-type]
+                        db_handler=self.db,
+                        rule_engine=self.rule_engine,
+                        farm_path=self.farm_path,
+                        introduction_date=self.test_date,
+                        initial_cows=[{
+                            "cow_id": cow_id,
+                            "jpn10": jpn10,
+                            "breed": row_data.get("breed") or "ホルスタイン",
+                            "birth_date": row_data.get("birth_date") or "",
+                            "lact": row_data.get("lact") or 0,
+                            "clvd": row_data.get("clvd") or "",
+                            "pregnant_status": "",
+                        }],
+                        event_dictionary_path=None,
+                        close_after_save=True,
+                    )
+
+                    intro_window.show()
+                    intro_window.window.grab_set()
+                    intro_window.window.wait_window()
+                    intro_window.window.grab_release()
+
+                    # 再チェック：個体が作られていれば乳検作成へ
+                    cow = self.db.get_cow_by_id(cow_id)
+                    if not cow:
+                        try:
+                            cows = self.db.get_cows_by_jpn10(jpn10)
+                            if cows:
+                                cow = cows[0]
+                        except Exception:
+                            cow = None
+
+                    cow_created = bool(cow and cow.get("auto_id"))
+
+                except Exception as e:
+                    logger.error(f"導入ウィンドウ起動/再チェックに失敗: {e}", exc_info=True)
+
+                if not cow or not cow_created:
+                    error_count += 1
+                    error_cows.append({
+                        'cow_id': cow_id,
+                        'jpn10': jpn10,
+                        'reason': '導入登録が完了せず、個体を作成できませんでした'
+                    })
+                    logger.warning(f"個体作成できず: cow_id={cow_id}, jpn10={jpn10}")
+                    continue
+            
+            cow_auto_id = cow.get('auto_id')
+            if not isinstance(cow_auto_id, int):
                 error_count += 1
                 error_cows.append({
                     'cow_id': cow_id,
                     'jpn10': jpn10,
-                    'reason': 'マスタに個体がありません'
+                    'reason': '個体のauto_idが取得できませんでした'
                 })
-                logger.warning(f"個体が見つかりません: cow_id={cow_id}, jpn10={jpn10}")
                 continue
-            
-            cow_auto_id = cow.get('auto_id')
             
             # 既存の乳検イベントをチェック
             events = self.db.get_events_by_cow(cow_auto_id, include_deleted=False)
@@ -464,7 +584,14 @@ class MilkTestImportWindow:
                 self._show_error_cows_window(error_cows)
         else:
             messagebox.showinfo("完了", result_msg)
-        
+
+        # メイン画面を更新
+        if self.on_complete:
+            try:
+                self.on_complete()
+            except Exception:
+                pass
+
         # プレビューを更新
         self._update_preview()
     

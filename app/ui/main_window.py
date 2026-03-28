@@ -6,6 +6,7 @@ FALCON2 - MainWindow（メインウィンドウ）
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from tkinter.scrolledtext import ScrolledText
 from typing import Optional, Literal, List, Dict, Any, Tuple, Union
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -17,6 +18,9 @@ import threading
 import webbrowser
 import tempfile
 import html
+import os
+import platform
+import csv
 
 try:
     from matplotlib.figure import Figure
@@ -30,7 +34,6 @@ except ImportError:
 from db.db_handler import DBHandler
 from modules.formula_engine import FormulaEngine
 from modules.rule_engine import RuleEngine
-from modules.chatgpt_client import ChatGPTClient
 from modules.query_normalizer import QueryNormalizer
 from modules.query_executor import QueryExecutor
 from modules.query_router import QueryRouter
@@ -60,6 +63,7 @@ from modules.app_settings_manager import get_app_settings_manager
 from modules.activity_log import load_entries
 from ui.cow_card import CowCard
 from ui.event_input import EventInputWindow
+from ui.introduction_window import IntroductionWindow
 from ui.batch_item_edit_window import BatchItemEditWindow
 from modules.batch_update import BatchUpdate
 from datetime import date, timedelta
@@ -68,16 +72,12 @@ from datetime import date, timedelta
 from ui.main_window_dashboard import DashboardMixin
 from ui.main_window_conception_rate import ConceptionRateMixin
 from ui.main_window_scatter import ScatterPlotMixin
-from ui.main_window_chatgpt import ChatGPTMixin
-from ui.main_window_chatview import ChatViewMixin
 
 
 class MainWindow(
     DashboardMixin,
     ConceptionRateMixin,
     ScatterPlotMixin,
-    ChatGPTMixin,
-    ChatViewMixin,
 ):
     """メインウィンドウ（サイドメニュー + メイン表示領域）"""
     
@@ -248,23 +248,18 @@ class MainWindow(
         # レポート作成ダイアログ・ゲノムレポート等（既に開いていれば前面に表示）
         self._report_builder_dialog: Optional[tk.Toplevel] = None
         self._genome_report_window: Optional[Any] = None
+
         self._dictionary_settings_dialog: Optional[tk.Toplevel] = None
         self._data_output_dialog: Optional[tk.Toplevel] = None
-        
-        # ChatGPTClientの初期化（エラー時はNoneのまま）
-        self.chatgpt_client: Optional[ChatGPTClient] = None
-        self.system_prompt: Optional[str] = None
-        try:
-            self.chatgpt_client = ChatGPTClient()
-            # system_promptを読み込む
-            system_prompt_path = Path("config/falcon_ai_system_prompt.txt")
-            if system_prompt_path.exists():
-                self.system_prompt = system_prompt_path.read_text(encoding='utf-8')
-            else:
-                logging.warning(f"system_promptファイルが見つかりません: {system_prompt_path}")
-        except Exception as e:
-            logging.warning(f"ChatGPTClientの初期化に失敗しました: {e}")
-            # ChatGPTが使えない場合でもアプリは動作する
+        self._usage_manual_dialog: Optional[tk.Toplevel] = None
+        self._data_import_dialog: Optional[tk.Toplevel] = None
+        self._reproduction_checkup_window: Optional[Any] = None
+        self._farm_management_window: Optional[Any] = None
+        self._app_settings_window: Optional[Any] = None
+
+        # ウィンドウレジストリ（スイッチャーバー用）
+        self._open_windows: Dict[str, Dict] = {}
+        self._switcher_frame: Optional[tk.Frame] = None
         
         # 分析ジョブ管理
         self.analysis_running: bool = False
@@ -393,87 +388,207 @@ class MainWindow(
         
         # ========== 左カラム：サイドメニュー（ダークネイビーでスタイリッシュに） ==========
         _df = "Meiryo UI"
-        side_bg = "#1e2a3a"  # ダークネイビー
-        side_fg = "#ffffff"  # 白文字
-        side_hover_bg = "#2d3e50"  # ホバー時の背景
-        side_accent = "#5c9ce6"  # アクセントカラー（淡いブルー）
+        side_bg       = "#1e2a3a"   # ダークネイビー
+        side_fg       = "#ffffff"   # 白文字
+        side_hover_bg = "#2d3e50"   # ホバー
+        side_accent   = "#5c9ce6"   # ライトブルーアクセント
+        _grad_top     = "#0a1628"   # グラデーション上端（最深紺）
+        _grad_bot     = "#1e2a3a"   # グラデーション下端（標準紺）
         try:
             _sm = SettingsManager(self.farm_path)
             _farm_display_name = _sm.get("farm_name", self.farm_path.name)
         except Exception:
             _farm_display_name = self.farm_path.name
-        
+
+        # ── グラデーション描画ヘルパー（縦方向: 上→下）──────────────
+        def _apply_gradient(canvas, c1, c2):
+            """Canvas に縦グラデーションを描画（Configure にバインド）"""
+            r1,g1,b1 = int(c1[1:3],16), int(c1[3:5],16), int(c1[5:7],16)
+            r2,g2,b2 = int(c2[1:3],16), int(c2[3:5],16), int(c2[5:7],16)
+            def _draw(event=None):
+                canvas.delete("_grad")
+                w = canvas.winfo_width()
+                h = canvas.winfo_height()
+                if w < 2 or h < 2:
+                    return
+                for i in range(h):
+                    t = i / max(h - 1, 1)
+                    r = int(r1 + (r2 - r1) * t)
+                    g = int(g1 + (g2 - g1) * t)
+                    b = int(b1 + (b2 - b1) * t)
+                    canvas.create_rectangle(0, i, w, i + 1,
+                                            fill=f"#{r:02x}{g:02x}{b:02x}",
+                                            outline="", tags="_grad")
+                canvas.lower("_grad")
+            canvas.bind("<Configure>", lambda e: _draw())
+            canvas.after(80, _draw)
+        # ─────────────────────────────────────────────────────────────
+
         left_container = tk.Frame(main_paned, bg=side_bg, width=220)
         left_container.pack_propagate(False)
         main_paned.add(left_container, weight=0)
-        
-        # サイドメニュー・ヘッダー（FALCONテキストのみ）
-        side_header = tk.Frame(left_container, bg=side_bg, pady=18, padx=16)
-        side_header.pack(fill=tk.X)
-        tk.Label(side_header, text="FALCON", font=(_df, 14, "bold"), bg=side_bg, fg=side_fg).pack(side=tk.LEFT, anchor=tk.W)
-        
+
+        # サイドメニュー・ヘッダー（縦グラデーション Canvas）
+        side_header_canvas = tk.Canvas(left_container, height=60,
+                                       highlightthickness=0, bd=0, bg=_grad_top)
+        side_header_canvas.pack(fill=tk.X)
+        _apply_gradient(side_header_canvas, _grad_top, side_bg)
+        side_header_canvas.create_text(16, 30, text="FALCON",
+                                       font=(_df, 14, "bold"), fill=side_fg,
+                                       anchor=tk.W, tags="_falcon_txt")
+
         # セパレーター
-        separator = tk.Frame(left_container, bg="#3a4a5a", height=1)
+        separator = tk.Frame(left_container, bg="#2a3a4a", height=1)
         separator.pack(fill=tk.X, padx=16)
         
-        # メニューボタン（ダーク背景・白文字）
-        menu_buttons = [
-            ("🐄 個体カード", self._on_cow_card),
-            ("🩺 繁殖検診", self._on_reproduction_checkup),
-            ("📝 イベント入力", self._on_event_input),
-            ("📋 レポート作成", self._on_report_builder),
-            ("📊 ダッシュボード", self._on_dashboard),
-            ("📥 データ吸い込み", self._on_milk_test_import),
-            ("📤 データ出力", self._on_data_output),
-            ("📚 辞書・設定", self._on_dictionary_settings),
-            ("🏡 農場管理", self._on_farm_management),
-            ("⚙️ アプリ設定", self._on_app_settings),
+        # メニューボタン（グループ分け・アクティブ状態インジケーター付き）
+        menu_groups = [
+            ("牛の管理", [
+                ("🐄 個体カード",    self._on_cow_card),
+                ("🩺 繁殖検診",      self._on_reproduction_checkup),
+                ("📥 導入",          self._on_introduction),
+                ("📝 イベント入力",  self._on_event_input),
+            ]),
+            ("帳票・分析", [
+                ("📋 レポート作成",  self._on_report_builder),
+                ("📊 ダッシュボード", self._on_dashboard),
+            ]),
+            ("データ管理", [
+                ("📥 データ吸い込み", self._on_milk_test_import),
+                ("📤 データ出力",    self._on_data_output),
+            ]),
+            ("設定・管理", [
+                ("📚 辞書・設定",    self._on_dictionary_settings),
+                ("🏡 農場管理",      self._on_farm_management),
+                ("⚙️ アプリ設定",   self._on_app_settings),
+                ("📚 使用説明書",    self._on_usage_manual),
+            ]),
         ]
-        
-        menu_inner = tk.Frame(left_container, bg=side_bg, padx=8, pady=12)
+
+        menu_inner = tk.Frame(left_container, bg=side_bg, padx=0, pady=8)
         menu_inner.pack(fill=tk.BOTH, expand=True)
-        
-        def on_enter(e, btn):
-            btn.config(bg=side_hover_bg)
-        def on_leave(e, btn):
-            btn.config(bg=side_bg)
-        
-        for text, command in menu_buttons:
-            btn = tk.Button(
-                menu_inner, text=text, command=command,
-                font=(_df, 11), bg=side_bg, fg=side_fg,
-                activebackground=side_hover_bg, activeforeground=side_fg,
-                relief=tk.FLAT, bd=0, highlightthickness=0,
-                cursor="hand2", anchor=tk.W, padx=14, pady=10
-            )
-            btn.pack(fill=tk.X, pady=2)
-            btn.bind("<Enter>", lambda e, b=btn: on_enter(e, b))
-            btn.bind("<Leave>", lambda e, b=btn: on_leave(e, b))
-        
+
+        # アクティブ状態管理
+        _active = {'indicator': None}
+
+        def _set_active(ind):
+            if _active['indicator'] is not None:
+                try:
+                    _active['indicator'].config(bg=side_bg)
+                except Exception:
+                    pass
+            ind.config(bg=side_accent)
+            _active['indicator'] = ind
+
+        def on_enter(e, btn, ind):
+            if _active['indicator'] is not ind:
+                btn.config(bg=side_hover_bg)
+        def on_leave(e, btn, ind):
+            if _active['indicator'] is not ind:
+                btn.config(bg=side_bg)
+
+        for group_label, buttons in menu_groups:
+            lbl_frame = tk.Frame(menu_inner, bg=side_bg, padx=18)
+            lbl_frame.pack(fill=tk.X, pady=(10, 2))
+            tk.Label(lbl_frame, text=group_label.upper(),
+                     font=(_df, 8), bg=side_bg, fg="#607d8b").pack(anchor=tk.W)
+
+            for text, command in buttons:
+                row = tk.Frame(menu_inner, bg=side_bg)
+                row.pack(fill=tk.X, pady=1)
+
+                ind = tk.Frame(row, bg=side_bg, width=3)
+                ind.pack(side=tk.LEFT, fill=tk.Y)
+                ind.pack_propagate(False)
+
+                btn = tk.Button(
+                    row, text=text, font=(_df, 11),
+                    bg=side_bg, fg=side_fg,
+                    activebackground=side_hover_bg, activeforeground=side_fg,
+                    relief=tk.FLAT, bd=0, highlightthickness=0,
+                    cursor="hand2", anchor=tk.W, padx=14, pady=9
+                )
+                btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+                def _make_cmd(cmd, indicator):
+                    def _cmd():
+                        _set_active(indicator)
+                        cmd()
+                    return _cmd
+
+                btn.config(command=_make_cmd(command, ind))
+                btn.bind("<Enter>", lambda e, b=btn, i=ind: on_enter(e, b, i))
+                btn.bind("<Leave>", lambda e, b=btn, i=ind: on_leave(e, b, i))
+
+            # グループ区切り線
+            tk.Frame(menu_inner, bg="#2a3a4a", height=1).pack(
+                fill=tk.X, padx=16, pady=(6, 0))
+
         # 従来の SideMenu.TButton を参照している他箇所用にスタイルは維持（ttk は右カラムで使用）
         self.style.configure('SideMenu.TButton', padding=(8, 10))
         
-        # ========== 右カラム：メイン表示領域（クリーンな白背景） ==========
+        # ========== 右カラム：メイン表示領域 ==========
         _df = "Meiryo UI"
-        bg = "#ffffff"  # 白背景
-        right_container = tk.Frame(main_paned, bg=bg)
+        content_bg = "#f0f2f5"  # 薄グレー背景
+        right_container = tk.Frame(main_paned, bg=content_bg)
         main_paned.add(right_container, weight=1)
-        
-        # ヘッダー（農場名を表示・サイドバーと同じ濃い藍色）
-        header = tk.Frame(right_container, bg=side_bg, pady=12, padx=24)
-        header.pack(fill=tk.X)
-        title_frame = tk.Frame(header, bg=side_bg)
-        title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self._main_farm_name_label = tk.Label(title_frame, text=_farm_display_name, font=(_df, 16, "bold"), bg=side_bg, fg=side_fg)
-        self._main_farm_name_label.pack(anchor=tk.W)
-        tk.Label(title_frame, text="コマンドを入力してリスト・集計・グラフを表示します", font=(_df, 10), bg=side_bg, fg="#90a4ae").pack(anchor=tk.W)
-        
-        right_frame = ttk.Frame(right_container)
-        right_frame.pack(fill=tk.BOTH, expand=True, padx=24, pady=(0, 10))
-        
+
+        # ヘッダー（縦グラデーション Canvas・農場名は白抜き）
+        header_canvas = tk.Canvas(right_container, height=68,
+                                  highlightthickness=0, bd=0, bg=_grad_top)
+        header_canvas.pack(fill=tk.X)
+        _apply_gradient(header_canvas, _grad_top, _grad_bot)
+        _farm_txt_id = header_canvas.create_text(
+            24, 18, text=_farm_display_name,
+            font=(_df, 16, "bold"), fill=side_fg, anchor=tk.NW)
+        header_canvas.create_text(
+            24, 46, text="コマンドを入力してリスト・集計・グラフを表示します",
+            font=(_df, 10), fill="#90a4ae", anchor=tk.NW)
+
+        # 農場切り替えボタン（ヘッダー右端）
+        _switch_btn = tk.Button(
+            header_canvas, text="⇄ 農場切り替え",
+            font=(_df, 9), bg="#3a4a5a", fg="#cfd8dc",
+            activebackground="#4a5a6a", activeforeground="white",
+            relief=tk.FLAT, bd=0, padx=8, pady=3, cursor="hand2",
+            command=self._on_farm_management)
+        header_canvas.create_window(
+            header_canvas.winfo_reqwidth() - 12, 34,
+            anchor=tk.E, window=_switch_btn, tags="_switch_btn_win")
+
+        def _reposition_switch_btn(event=None):
+            header_canvas.coords("_switch_btn_win", event.width - 12, 34)
+        header_canvas.bind("<Configure>", _reposition_switch_btn)
+
+        # 農場切り替え時に農場名テキストを更新するためのプロキシ
+        class _CanvasTextProxy:
+            __slots__ = ('_c', '_id')
+            def __init__(self, c, iid): self._c = c; self._id = iid
+            def config(self, **kw):
+                if 'text' in kw: self._c.itemconfig(self._id, text=kw['text'])
+            def winfo_exists(self): return True
+        self._main_farm_name_label = _CanvasTextProxy(header_canvas, _farm_txt_id)
+
+        # ウィンドウスイッチャーバー（開いているウィンドウ一覧・下部に固定）
+        _swbg = "#2a3542"
+        self._switcher_frame = tk.Frame(right_container, bg=_swbg, height=32)
+        self._switcher_frame.pack_propagate(False)
+        self._switcher_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        tk.Label(self._switcher_frame, text="  開いているウィンドウはありません",
+                 bg=_swbg, fg="#546e7a", font=(_df, 9)).pack(side=tk.LEFT, padx=4)
+
+        right_frame = tk.Frame(right_container, bg=content_bg)
+        right_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(10, 8))
+
+        # コマンド入力カード（白背景・薄ボーダー）
+        cmd_card = tk.Frame(right_frame, bg="#ffffff",
+                            highlightbackground="#d0d5e0",
+                            highlightthickness=1)
+        cmd_card.pack(fill=tk.X, pady=(0, 8))
+
         # 右上：コマンド入力欄
-        command_frame = ttk.Frame(right_frame)
-        command_frame.pack(fill=tk.X, padx=0, pady=5)
+        command_frame = ttk.Frame(cmd_card)
+        command_frame.pack(fill=tk.X, padx=12, pady=8)
         
         # コマンドタイプ選択（Combobox）
         command_type_frame = ttk.Frame(command_frame)
@@ -484,7 +599,7 @@ class MainWindow(
         command_type_combo = ttk.Combobox(
             command_type_frame,
             textvariable=self.command_type_var,
-            values=["", "受胎率（経産）", "リスト", "イベントリスト", "イベント集計", "集計（経産牛）", "グラフ", "項目一括変更"],
+            values=["", "妊娠率", "妊娠率（DIM）", "受胎率（経産）", "受胎率（未経産）", "リスト", "イベントリスト", "イベント集計", "集計（経産牛）", "グラフ", "項目一括変更"],
             width=12,
             state="readonly",
             font=(self._main_font_family, self.default_font_size)
@@ -664,7 +779,36 @@ class MainWindow(
         self.conception_rate_condition_entry.bind('<Return>', self._on_condition_enter)  # エンターキーで実行
         self.conception_rate_condition_placeholder = "例）DIM<150 または 産次：初産"
         self.conception_rate_condition_placeholder_shown = True
-        
+
+        # 妊娠率フレーム（妊娠率タイプ選択時のみ表示）
+        self.pregnancy_rate_frame = ttk.Frame(right_frame)
+        # 初期状態では非表示
+
+        # VWP入力欄
+        ttk.Label(self.pregnancy_rate_frame, text="VWP（日）:", font=(self._main_font_family, self.default_font_size)).pack(side=tk.LEFT, padx=(10, 5))
+        self.pregnancy_rate_vwp_var = tk.StringVar(value="50")
+        self.pregnancy_rate_vwp_entry = ttk.Spinbox(
+            self.pregnancy_rate_frame, from_=1, to=365,
+            textvariable=self.pregnancy_rate_vwp_var, width=5,
+            font=(self._main_font_family, self.default_font_size)
+        )
+        self.pregnancy_rate_vwp_entry.pack(side=tk.LEFT, padx=5)
+        self.pregnancy_rate_vwp_entry.bind('<Return>', self._on_condition_enter)
+
+        # 条件入力欄
+        self.pregnancy_rate_condition_label = ttk.Label(self.pregnancy_rate_frame, text="条件:", font=(self._main_font_family, self.default_font_size))
+        self.pregnancy_rate_condition_label.pack(side=tk.LEFT, padx=(10, 5))
+        self.pregnancy_rate_condition_entry = ttk.Entry(self.pregnancy_rate_frame, width=40)
+        self.pregnancy_rate_condition_entry.pack(side=tk.LEFT, padx=5)
+        self.pregnancy_rate_condition_entry.insert(0, "例）産次：初産")
+        self.pregnancy_rate_condition_entry.config(foreground="gray")
+        self.pregnancy_rate_condition_entry.bind('<FocusIn>', self._on_pregnancy_rate_condition_focus_in)
+        self.pregnancy_rate_condition_entry.bind('<FocusOut>', self._on_pregnancy_rate_condition_focus_out)
+        self.pregnancy_rate_condition_entry.bind('<Return>', self._on_condition_enter)
+        self.pregnancy_rate_condition_placeholder = "例）産次：初産"
+        self.pregnancy_rate_condition_placeholder_shown = True
+
+
         # グラフ入力フレーム（グラフタイプ選択時のみ表示）
         self.graph_input_frame = ttk.Frame(right_frame)
         # 初期状態では非表示
@@ -892,46 +1036,6 @@ class MainWindow(
         table_scrollbar_y.config(command=self.result_treeview.yview)
         table_scrollbar_x.config(command=self.result_treeview.xview)
         
-        # グラフタブ
-        graph_frame = ttk.Frame(result_notebook)
-        result_notebook.add(graph_frame, text="グラフ")
-        
-        # グラフタブの上部：コマンド表示エリア
-        graph_header_frame = ttk.Frame(graph_frame)
-        graph_header_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        # コマンド表示テキスト（選択・コピー可能）
-        self.graph_command_text = tk.Text(
-            graph_header_frame,
-            height=1,
-            font=(self._main_font_family, 9),
-            foreground="black",
-            wrap=tk.NONE,
-            relief=tk.FLAT,
-            borderwidth=0,
-            highlightthickness=0,
-            state=tk.DISABLED,
-            cursor="ibeam"
-        )
-        self.graph_command_text.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        
-        # グラフ表示エリア（matplotlib）
-        if MATPLOTLIB_AVAILABLE:
-            self.graph_figure = Figure(figsize=(10, 6), dpi=100)
-            self.graph_canvas = FigureCanvasTkAgg(self.graph_figure, graph_frame)
-            self.graph_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        else:
-            self.graph_figure = None
-            self.graph_canvas = None
-            no_graph_label = tk.Label(
-                graph_frame,
-                text="matplotlib がインストールされていません。グラフ機能は使用できません。",
-                foreground="red"
-            )
-            no_graph_label.pack(expand=True)
-        
-        self.graph_frame = graph_frame
-        
         # 操作ログタブ（イベント登録・更新・削除の履歴、config/activity_log.json）
         activity_log_frame = ttk.Frame(result_notebook)
         result_notebook.add(activity_log_frame, text="操作ログ")
@@ -985,24 +1089,36 @@ class MainWindow(
         al_vsb.pack(side=tk.RIGHT, fill=tk.Y)
         al_hsb.pack(fill=tk.X)
         
+        # メッセージタブ（コマンドのテキスト結果・システム通知。旧チャット欄の代替）
+        message_tab_frame = ttk.Frame(result_notebook)
+        result_notebook.add(message_tab_frame, text="メッセージ")
+        self.message_log_text = ScrolledText(
+            message_tab_frame,
+            wrap=tk.WORD,
+            font=(self._main_font_family, self.default_font_size),
+            state=tk.DISABLED,
+            height=10,
+        )
+        self.message_log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
         result_notebook.bind("<<NotebookTabChanged>>", self._on_main_result_notebook_tab_changed)
         self._refresh_main_activity_log()
         
         self.result_notebook = result_notebook
         
-        # 右側：メイン表示領域（ChatGPT / View切替）- 結果表示エリアの下に配置
+        # 右側：メイン表示領域（View切替）- 結果表示エリアの下に配置
         self.main_content_frame = ttk.Frame(right_frame)
         # 初期表示時は非表示（表・グラフタブのエリアを拡張するため）
         # self.main_content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # 初期表示：ChatGPT画面（非表示のまま）
-        # self._show_chat_view()
-        
         # 農場全体の最終日付を計算して表示
         self._calculate_and_update_farm_latest_dates()
-    
-    
-    def show_view(self, view_widget: tk.Widget, view_type: Literal['chat', 'cow_card', 'list', 'report']):
+
+        # ウィンドウスイッチャーのポーリング開始（全Toplevelを自動検出）
+        self.root.after(500, self._poll_all_toplevels)
+
+
+    def show_view(self, view_widget: tk.Widget, view_type: Literal['cow_card', 'list', 'report']):
         """
         Viewを表示（切替機構）
         
@@ -1040,102 +1156,105 @@ class MainWindow(
         # 現在のViewを記録
         self.current_view = view_widget
         self.current_view_type = view_type
-    
-    def _show_chat_view(self):
-        """ChatGPT画面を表示"""
-        # 既存のchat_viewがあれば再利用、なければ新規作成
-        if 'chat' in self.views:
-            chat_frame = self.views['chat']
-        else:
-            # 新しいchat_frameを作成（parent は main_content_frame）
-            chat_frame = ttk.Frame(self.main_content_frame)
-            
-            # Canvas + Scrollbar でチャット履歴表示エリアを作成
-            # CanvasとScrollbarを配置するフレーム
-            canvas_container = ttk.Frame(chat_frame)
-            canvas_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-            
-            # Scrollbar
-            scrollbar = ttk.Scrollbar(canvas_container, orient=tk.VERTICAL)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            
-            # Canvas
-            canvas = tk.Canvas(
-                canvas_container,
-                bg="#FFFFFF",
-                yscrollcommand=scrollbar.set,
-                highlightthickness=0
+
+    # ========== ウィンドウ管理（スイッチャーバー） ==========
+
+    def _register_window(self, key: str, window: tk.Toplevel, label: str):
+        """transientを設定する（後方互換用）。スイッチャーはポーリングで自動更新。"""
+        try:
+            window.transient(self.root)
+        except Exception:
+            pass
+
+    def _unregister_window(self, key: str):
+        """後方互換用（ポーリング方式では何もしない）"""
+        pass
+
+    def _focus_window(self, key: str):
+        """指定キーのウィンドウを前面に出す"""
+        info = self._open_windows.get(key)
+        if not info:
+            return
+        w = info['window']
+        try:
+            if w.winfo_exists():
+                w.deiconify()
+                w.lift()
+                w.focus_force()
+            else:
+                self._open_windows.pop(key, None)
+                self._update_window_switcher()
+        except tk.TclError:
+            self._open_windows.pop(key, None)
+            self._update_window_switcher()
+
+    def _poll_all_toplevels(self):
+        """全Toplevelを自動検出してスイッチャーバーを更新（500msごと）"""
+        try:
+            # wm stackorder で全トップレベルウィンドウのパスを取得
+            stack = self.root.tk.splitlist(self.root.tk.eval('wm stackorder .'))
+            current: Dict[str, Dict] = {}
+            for path in stack:
+                if path == '.':
+                    continue  # root自身はスキップ
+                try:
+                    w = self.root.nametowidget(path)
+                    if isinstance(w, tk.Toplevel) and w.winfo_exists():
+                        title = w.title() or "ウィンドウ"
+                        current[path] = {'window': w, 'label': title}
+                        # 新規ウィンドウにtransientを設定
+                        if path not in self._open_windows:
+                            try:
+                                w.transient(self.root)
+                            except Exception:
+                                pass
+                except (KeyError, tk.TclError):
+                    pass
+
+            # 変化があればスイッチャーを更新
+            if set(current.keys()) != set(self._open_windows.keys()):
+                self._open_windows = current
+                self._update_window_switcher()
+            else:
+                # タイトル変更チェック
+                for k, v in current.items():
+                    if self._open_windows.get(k, {}).get('label') != v['label']:
+                        self._open_windows = current
+                        self._update_window_switcher()
+                        break
+        except Exception as e:
+            logging.debug(f"_poll_all_toplevels: {e}")
+        self.root.after(500, self._poll_all_toplevels)
+
+    def _update_window_switcher(self):
+        """スイッチャーバーのボタンを再描画"""
+        if self._switcher_frame is None:
+            return
+        try:
+            for widget in self._switcher_frame.winfo_children():
+                widget.destroy()
+        except tk.TclError:
+            return
+        _df = "Meiryo UI"
+        _swbg = "#2a3542"
+        if not self._open_windows:
+            tk.Label(self._switcher_frame, text="  開いているウィンドウはありません",
+                     bg=_swbg, fg="#546e7a", font=(_df, 9)).pack(side=tk.LEFT, padx=4)
+            return
+        tk.Label(self._switcher_frame, text="  開中：",
+                 bg=_swbg, fg="#90a4ae", font=(_df, 9)).pack(side=tk.LEFT, padx=(6, 2))
+        for key, info in list(self._open_windows.items()):
+            btn = tk.Button(
+                self._switcher_frame,
+                text=f"  {info['label']}  ",
+                command=lambda k=key: self._focus_window(k),
+                bg="#3a4e63", fg="#ffffff",
+                activebackground="#5c9ce6", activeforeground="#ffffff",
+                relief=tk.FLAT, bd=0, highlightthickness=0,
+                font=(_df, 9), cursor="hand2"
             )
-            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            scrollbar.config(command=canvas.yview)
-            
-            # メッセージを配置するフレーム（Canvas内に配置）
-            messages_frame = ttk.Frame(canvas)
-            canvas_window = canvas.create_window(
-                (0, 0),
-                window=messages_frame,
-                anchor=tk.NW
-            )
-            
-            # Canvasのサイズ変更時にmessages_frameの幅を調整
-            def configure_canvas_width(event):
-                canvas_width = event.width
-                canvas.itemconfig(canvas_window, width=canvas_width)
-                # messages_frameの各メッセージカードの幅も調整
-                for widget in messages_frame.winfo_children():
-                    if isinstance(widget, tk.Frame):
-                        widget.config(width=canvas_width)
-            
-            canvas.bind('<Configure>', configure_canvas_width)
-            
-            # messages_frameのサイズ変更時にCanvasのスクロール領域を更新
-            def configure_messages_frame(event):
-                canvas.update_idletasks()
-                canvas.config(scrollregion=canvas.bbox("all"))
-            
-            messages_frame.bind('<Configure>', configure_messages_frame)
-            
-            # マウスホイールでスクロール（Windows用）
-            def on_mousewheel(event):
-                # Windowsでは event.delta が使用可能
-                if event.delta:
-                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-                # Linux/Macでは event.num を使用
-                elif event.num == 4:
-                    canvas.yview_scroll(-1, "units")
-                elif event.num == 5:
-                    canvas.yview_scroll(1, "units")
-            
-            # Windows用のマウスホイールイベント
-            canvas.bind_all("<MouseWheel>", on_mousewheel)
-            # Linux用のマウスホイールイベント
-            canvas.bind_all("<Button-4>", on_mousewheel)
-            canvas.bind_all("<Button-5>", on_mousewheel)
-            
-            # Canvas内のマウスホイールも処理
-            def on_canvas_mousewheel(event):
-                canvas.focus_set()
-                on_mousewheel(event)
-            
-            canvas.bind("<MouseWheel>", on_canvas_mousewheel)
-            
-            # チャット関連のUI要素を保存
-            self.chat_canvas = canvas
-            self.chat_messages_frame = messages_frame
-            self.chat_scrollbar = scrollbar
-            self.chat_canvas_window = canvas_window
-            
-            # 散布図表示用のFrame（初期状態では非表示）
-            self.scatter_plot_frame = ttk.Frame(chat_frame)
-            # 初期状態ではpackしない（散布図が表示される時にpackする）
-        
-        # View切替（show_view 内で既存のViewを pack_forget）
-        self.show_view(chat_frame, 'chat')
-        
-        # 初期メッセージは表示しない（日本語クエリUIとして即座に使えるように）
-        if not hasattr(self, '_chat_initialized'):
-            self._chat_initialized = True
-    
+            btn.pack(side=tk.LEFT, padx=3, pady=4)
+
     def _on_cow_card(self):
         """個体カードメニューをクリック（個体一覧ウィンドウを開く／既に開いていれば前面に出す）"""
         from ui.cow_list_window import CowListWindow
@@ -1148,6 +1267,7 @@ class MainWindow(
         # 新規に個体一覧ウィンドウを開く
         def _clear_cow_list_ref():
             self._cow_list_window = None
+            self._unregister_window('cow_list')
         list_window = CowListWindow(
             parent=self.root,
             db_handler=self.db,
@@ -1159,6 +1279,7 @@ class MainWindow(
         )
         self._cow_list_window = list_window
         list_window.show()
+        self._register_window('cow_list', list_window.window, '個体一覧')
     
     def _show_cow_card_view(self, cow_auto_id: int):
         """
@@ -1167,6 +1288,13 @@ class MainWindow(
         Args:
             cow_auto_id: 牛の auto_id
         """
+        # 個体カード用フレームが未配置なら配置（表ノートブックの下に表示）
+        try:
+            if self.main_content_frame.winfo_exists() and not self.main_content_frame.winfo_ismapped():
+                self.main_content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        except tk.TclError:
+            pass
+
         # 既存のCowCardがあれば再利用、なければ新規作成
         if 'cow_card' in self.views and self.current_cow_card:
             cow_card = self.current_cow_card
@@ -1198,10 +1326,37 @@ class MainWindow(
         # 群全体の最終日付を再計算して表示を更新（個体カード表示時も更新）
         self._calculate_and_update_farm_latest_dates()
     
+    def _jump_to_cow_card(self, cow_id: str) -> None:
+        """個体ID（数値・4桁ゼロ埋め）で DB を検索し、個体カードを表示する。"""
+        cid = (cow_id or "").strip().zfill(4)
+        if not cid.isdigit():
+            return
+        try:
+            cow = self.db.get_cow_by_id(cid)
+        except Exception as e:
+            logging.error("_jump_to_cow_card: DB エラー: %s", e, exc_info=True)
+            self.add_message(role="system", text=f"個体の検索中にエラーが発生しました: {e}")
+            return
+        if not cow:
+            self.add_message(role="system", text=f"個体ID {cid} は見つかりません。")
+            return
+        auto_id = cow.get("auto_id")
+        if auto_id is None:
+            self.add_message(role="system", text=f"個体ID {cid} のデータが不正です。")
+            return
+        self._show_cow_card_view(int(auto_id))
+    
     def _on_reproduction_checkup(self):
         """繁殖検診メニューをクリック"""
         from ui.reproduction_checkup_flow_window import ReproductionCheckupFlowWindow
-        
+
+        # 既に開いていれば前面に出す
+        if (self._reproduction_checkup_window is not None
+                and self._reproduction_checkup_window.window.winfo_exists()):
+            self._reproduction_checkup_window.window.lift()
+            self._reproduction_checkup_window.window.focus_set()
+            return
+
         repro_flow_window = ReproductionCheckupFlowWindow(
             parent=self.root,
             db_handler=self.db,
@@ -1210,8 +1365,23 @@ class MainWindow(
             farm_path=self.farm_path,
             event_dictionary_path=self.event_dict_path
         )
-        repro_flow_window.show()
+        self._reproduction_checkup_window = repro_flow_window
+        self._register_window('repro_checkup', repro_flow_window.window, '繁殖検診')
+        repro_flow_window.show()  # wait_window（ブロック）
+        self._reproduction_checkup_window = None
+        self._unregister_window('repro_checkup')
     
+    def _on_introduction(self):
+        """導入メニューをクリック"""
+        intro_win = IntroductionWindow(
+            parent=self.root,
+            db_handler=self.db,
+            rule_engine=self.rule_engine,
+            farm_path=self.farm_path,
+            event_dictionary_path=self.event_dict_path,
+        )
+        intro_win.show()
+
     def _on_event_input(self):
         """
         イベント入力メニューをクリック
@@ -1239,7 +1409,9 @@ class MainWindow(
             on_saved=self._on_event_saved,
             farm_path=self.farm_path
         )
-        event_input_window.show()
+        self._register_window('event_input', event_input_window.window, 'イベント入力')
+        event_input_window.show()  # wait_window（ブロック）
+        self._unregister_window('event_input')
     
     def _on_milk_test_import(self):
         """データ吸い込みメニューをクリック"""
@@ -1248,9 +1420,15 @@ class MainWindow(
     
     def _show_data_import_dialog(self):
         """データ吸い込みタイプ選択ダイアログ（デザイン統一・スマート表示）"""
+        # 既に開いていれば前面に出す
+        if self._data_import_dialog is not None and self._data_import_dialog.winfo_exists():
+            self._data_import_dialog.lift()
+            self._data_import_dialog.focus_force()
+            return
         _df = "Meiryo UI"
         dialog = tk.Toplevel(self.root)
         dialog.title("データ吸い込み")
+        self._data_import_dialog = dialog
         # 閉じるボタンまで余裕を持ってすべてが表示されるように高さを少し大きめに確保
         dialog.geometry("640x680")
         dialog.minsize(620, 640)
@@ -1299,7 +1477,15 @@ class MainWindow(
         footer = ttk.Frame(main)
         footer.pack(fill=tk.X, pady=(20, 0))
         ttk.Separator(footer, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 12))
-        ttk.Button(footer, text="閉じる", style="DataImport.Secondary.TButton", width=12, command=dialog.destroy).pack(side=tk.LEFT)
+
+        def _close_data_import():
+            self._data_import_dialog = None
+            self._unregister_window('data_import')
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", _close_data_import)
+        ttk.Button(footer, text="閉じる", style="DataImport.Secondary.TButton", width=12, command=_close_data_import).pack(side=tk.LEFT)
+        self._register_window('data_import', dialog, 'データ吸い込み')
 
     def _unified_dialog_icon_font(self):
         """記号が表示されるアイコン用フォント。Meiryo UI に統一（Segoe UI Symbol は Tk で未描画時に '--' になることがあるため）。"""
@@ -1344,8 +1530,8 @@ class MainWindow(
                        padx=16, pady=8, cursor="hand2", command=command)
         btn.pack(side=tk.RIGHT, padx=(10, 0))
 
-    def _build_milk_test_report_card(self, parent: tk.Frame, use_ai_var: tk.BooleanVar):
-        """乳検レポート用カード（AI使用チェックは乳検レポート専用としてカード内に配置）"""
+    def _build_milk_test_report_card(self, parent: tk.Frame):
+        """乳検レポート用カード"""
         _df = "Meiryo UI"
         card_bg = "#f5f5f5"
         card_pad = 16
@@ -1364,19 +1550,10 @@ class MainWindow(
         text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tk.Label(text_frame, text="乳検レポート", font=(_df, 11, "bold"), bg=card_bg, fg="#263238").pack(anchor=tk.W)
         tk.Label(text_frame, text="乳検日を選択して乳検レポートを作成します", font=(_df, 9), bg=card_bg, fg="#78909c").pack(anchor=tk.W)
-        # AI使用（乳検レポートの前月比較のみ対象）
-        ai_frame = tk.Frame(text_frame, bg=card_bg)
-        ai_frame.pack(anchor=tk.W, pady=(6, 0))
-        tk.Checkbutton(
-            ai_frame, text="AI使用（前月との比較を生成）",
-            variable=use_ai_var, font=(_df, 10), bg=card_bg, fg="#37474f",
-            activebackground=card_bg, activeforeground="#37474f", selectcolor=card_bg
-        ).pack(anchor=tk.W)
-        tk.Label(ai_frame, text="オフにするとAPIに依存せずレポートのみ出力します。", font=(_df, 9), bg=card_bg, fg="#78909c").pack(anchor=tk.W)
         btn = tk.Button(card, text="実行", font=(_df, 10), bg=btn_primary_bg, fg=btn_primary_fg,
                        activebackground="#303f9f", activeforeground="#ffffff", relief=tk.FLAT,
                        padx=16, pady=8, cursor="hand2",
-                       command=lambda: self._on_milk_test_report_builder(use_ai=use_ai_var.get()))
+                       command=lambda: self._on_milk_test_report_builder())
         btn.pack(side=tk.RIGHT, padx=(10, 0))
 
     def _build_unified_dialog_footer(self, dialog: tk.Toplevel, on_close=None):
@@ -1425,10 +1602,18 @@ class MainWindow(
         milk_test_import_window = MilkTestImportWindow(
             parent=self.root,
             db_handler=self.db,
-            rule_engine=self.rule_engine
+            rule_engine=self.rule_engine,
+            farm_path=self.farm_path,
+            on_complete=self._on_data_import_complete,
         )
         milk_test_import_window.show()
     
+    def _on_data_import_complete(self):
+        """データ吸い込み完了後にメイン画面の表示を更新する"""
+        self._calculate_and_update_farm_latest_dates()
+        if hasattr(self, '_refresh_table_display'):
+            self._refresh_table_display()
+
     def _on_milk_test_import_cancel(self):
         """乳検キャンセル：一括吸い込みした乳検日を選択し、その日の乳検イベントを一括削除"""
         from modules.rule_engine import RuleEngine
@@ -1985,9 +2170,11 @@ class MainWindow(
 
         def _close_data_output():
             self._data_output_dialog = None
+            self._unregister_window('data_output')
             dialog.destroy()
 
         dialog.protocol("WM_DELETE_WINDOW", _close_data_output)
+        self._register_window('data_output', dialog, 'データ出力')
 
         self._build_unified_dialog_header(dialog, "\u2b06\ufe0f", "データ出力", "出力するレポートを選択してください")
         content = tk.Frame(dialog, bg="#f5f5f5", padx=0, pady=8)
@@ -2011,17 +2198,18 @@ class MainWindow(
 
         def _close_report_builder():
             self._report_builder_dialog = None
+            self._unregister_window('report_builder')
             dialog.destroy()
 
         dialog.protocol("WM_DELETE_WINDOW", _close_report_builder)
+        self._register_window('report_builder', dialog, 'レポート作成')
 
         self._build_unified_dialog_header(dialog, "\U0001F4CB", "レポート作成", "作成するレポートを選択してください")  # 📋
         content = tk.Frame(dialog, bg="#f5f5f5", padx=0, pady=8)
         content.pack(fill=tk.BOTH, expand=True)
         _df = "Meiryo UI"
-        # 乳検レポート用カード（AI使用は乳検レポート専用なのでカード内に配置）
-        dialog.use_ai_var = tk.BooleanVar(value=True)
-        self._build_milk_test_report_card(content, dialog.use_ai_var)
+        # 乳検レポート用カード
+        self._build_milk_test_report_card(content)
         # ゲノムレポート
         self._build_unified_dialog_card(
             content, "", "ゲノムレポート", "", "実行",
@@ -2074,7 +2262,8 @@ class MainWindow(
             if not table_rows:
                 messagebox.showinfo("牛群動態予測レポート", "分娩予定が決まっている個体がありません。")
                 return
-            html_content = self._build_herd_dynamics_report_html(data)
+            farm_name = self.app_settings.get("farm_name", "") or (self.farm_path.name if self.farm_path else "")
+            html_content = self._build_herd_dynamics_report_html(data, farm_name)
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".html", delete=False) as f:
                 f.write(html_content)
                 temp_file_path = f.name
@@ -2197,7 +2386,7 @@ class MainWindow(
 </svg></div>
 <div class="legend herd-dynamics-legend">{legend}</div>'''
 
-    def _build_herd_dynamics_report_html(self, data: Dict[str, Any]) -> str:
+    def _build_herd_dynamics_report_html(self, data: Dict[str, Any], farm_name: str = "") -> str:
         """分娩予定月×予定産子種類の表とグラフのHTMLを組み立てる。全種類（不明含む）表示・1行でコンパクトに。"""
         import html as html_module
         import math
@@ -2364,6 +2553,11 @@ class MainWindow(
 <title>牛群動態予測レポート</title>
 <style>
 body {{ font-family: "Meiryo UI", sans-serif; margin: 12px; background: #f5f5f5; color: #263238; font-size: 12px; }}
+.report-header {{ border-bottom: 2px solid #0d6efd; padding-bottom: 10px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 2px; }}
+.report-brand {{ font-size: 1.3rem; font-weight: 600; color: #0d6efd; margin: 0 0 4px; letter-spacing: 0.03em; }}
+.report-meta {{ display: flex; gap: 24px; }}
+.report-meta dt {{ font-size: 10px; color: #90a4ae; font-weight: 400; }}
+.report-meta dd {{ font-size: 1rem; font-weight: 700; color: #263238; margin: 0; }}
 h1 {{ font-size: 14px; margin-bottom: 6px; }}
 .section {{ background: #fff; padding: 10px 12px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
 .section-main .section-title {{ margin-bottom: 6px; }}
@@ -2387,6 +2581,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
 @media print {{
   @page {{ size: A4 portrait; margin: 1cm; }}
   body {{ margin: 0; padding: 0; font-size: 11px; }}
+  .report-brand {{ font-size: 1.1rem !important; }}
+  .report-meta dd {{ font-size: 0.9rem !important; }}
   .section {{ padding: 8px 10px; margin-bottom: 8px; }}
   .section-title {{ font-size: 11px; margin-bottom: 6px; }}
   table.dynamics-table th, table.dynamics-table td {{ padding: 3px 5px; font-size: 9px; }}
@@ -2402,7 +2598,12 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
 </style>
 </head>
 <body>
-<h1>牛群動態予測レポート（分娩予定月×予定産子種類）</h1>
+<header class="report-header">
+  <p class="report-brand">牛群動態予測レポート</p>
+  <dl class="report-meta">
+    <dt>農場名</dt><dd>{html_module.escape(str(farm_name)) if farm_name else "—"}</dd>
+  </dl>
+</header>
 <div class="section section-main">
 <div class="section-title">表：分娩予定月別・産子種類別頭数</div>
 <div class="section-main-inner">
@@ -2447,9 +2648,11 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
 
         def _close_dictionary_settings():
             self._dictionary_settings_dialog = None
+            self._unregister_window('dict_settings')
             dialog.destroy()
 
         dialog.protocol("WM_DELETE_WINDOW", _close_dictionary_settings)
+        self._register_window('dict_settings', dialog, '辞書・設定')
 
         self._build_unified_dialog_header(dialog, "\u2605", "辞書・設定", "操作を選択してください")  # ★ BMPで表示確実
         # スクロール可能なコンテナ（ウィンドウサイズが小さくても全項目を表示）
@@ -2522,6 +2725,351 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
         dialog.geometry(f"+{x}+{y}")
 
+    def _on_usage_manual(self):
+        """使用説明書（`docs/使用説明書.md`）を軽量Markdown→HTMLにしてブラウザで表示します。"""
+        # 既存の使用説明書ダイアログが残っている場合は閉じる（本実装ではブラウザ表示に切替）
+        if self._usage_manual_dialog is not None:
+            try:
+                if self._usage_manual_dialog.winfo_exists():
+                    self._usage_manual_dialog.destroy()
+            except Exception:
+                pass
+        self._usage_manual_dialog = None
+
+        repo_root = Path(__file__).resolve().parents[2]
+        manual_path = repo_root / "docs" / "使用説明書.md"
+        if not manual_path.exists():
+            messagebox.showerror("エラー", f"使用説明書が見つかりません: {manual_path}")
+            return
+
+        try:
+            manual_text = manual_path.read_text(encoding="utf-8")
+        except Exception as e:
+            messagebox.showerror("エラー", f"使用説明書の読み込みに失敗しました: {e}")
+            return
+
+        def _slugify_heading(text: str) -> str:
+            # ドキュメント内の目次リンク（例: #3-3-条件の書き方詳細）に近い形に寄せる
+            s = text.strip()
+            s = s.replace("（", "").replace("）", "")
+            s = s.replace("(", "").replace(")", "")
+            s = s.replace(".", "")
+            s = s.replace("。", "")
+            s = s.replace("・", "-")
+            s = s.replace(" ", "-").replace("　", "-")
+            # 余計な連続ハイフンは圧縮
+            s = re.sub(r"-{2,}", "-", s)
+            return s
+
+        def _process_inline(md_inline: str) -> str:
+            # 全体をエスケープした上で、簡易な強調/コード/リンクだけ変換する
+            safe = html.escape(md_inline)
+
+            # [text](#anchor) をリンク化
+            def _repl_link(m: re.Match) -> str:
+                label = m.group(1)
+                anchor = m.group(2)
+                return f'<a href="#{anchor}">{label}</a>'
+
+            safe = re.sub(r"\[([^\]]+)\]\(#([^)]+)\)", _repl_link, safe)
+
+            # **bold**
+            safe = re.sub(r"\*\*([^*]+?)\*\*", r"<strong>\1</strong>", safe)
+
+            # `inline code`
+            safe = re.sub(r"`([^`]+?)`", r"<code>\1</code>", safe)
+
+            return safe
+
+        def _convert_md_to_html(md: str) -> str:
+            # B案（軽量Markdown→HTML）：見出し/リスト/引用/コード/区切り/テーブルを優先
+            lines = md.splitlines()
+            out: List[str] = []
+
+            # 箇条書きの現在状態
+            current_list_tag: Optional[str] = None  # 'ul' or 'ol'
+
+            def _close_list():
+                nonlocal current_list_tag
+                if current_list_tag is not None:
+                    out.append(f"</{current_list_tag}>")
+                    current_list_tag = None
+
+            def _emit_paragraph(text_lines: List[str]):
+                text = " ".join([t.strip() for t in text_lines if t.strip() != ""])
+                if not text:
+                    return
+                out.append(f"<p>{_process_inline(text)}</p>")
+
+            def _is_table_line(line: str) -> bool:
+                s = line.strip()
+                return s.startswith("|") and s.endswith("|") and "|" in s[1:-1]
+
+            def _parse_table(table_lines: List[str]) -> str:
+                # 簡易テーブル（ヘッダ+区切り+本体）
+                # | A | B |
+                # |---|---|
+                # | 1 | 2 |
+                def _split_row(row: str) -> List[str]:
+                    r = row.strip().strip("|")
+                    cells = [c.strip() for c in r.split("|")]
+                    return cells
+
+                if len(table_lines) < 2:
+                    return "<pre><code>" + html.escape("\n".join(table_lines)) + "</code></pre>"
+
+                header_cells = _split_row(table_lines[0])
+                sep_cells = _split_row(table_lines[1])
+                # separator check: '-'系のみ（: の左右寄せも許容）
+                is_sep = all(re.match(r"^:?-+:?$", c) for c in sep_cells if c != "")
+
+                thead = ""
+                tbody_rows = []
+                if is_sep:
+                    thead = "<thead><tr>" + "".join([f"<th>{_process_inline(c)}</th>" for c in header_cells]) + "</tr></thead>"
+                    for r in table_lines[2:]:
+                        if not _is_table_line(r):
+                            continue
+                        cells = _split_row(r)
+                        tbody_rows.append("<tr>" + "".join([f"<td>{_process_inline(cells[i] if i < len(cells) else '')}</td>" for i in range(len(header_cells))]) + "</tr>")
+                else:
+                    # separatorなしなら全行をtbody扱い（保険）
+                    thead = "<thead><tr>" + "".join([f"<th></th>" for _ in header_cells]) + "</tr></thead>"
+                    for r in table_lines:
+                        if not _is_table_line(r):
+                            continue
+                        cells = _split_row(r)
+                        tbody_rows.append("<tr>" + "".join([f"<td>{_process_inline(cells[i] if i < len(cells) else '')}</td>" for i in range(len(header_cells))]) + "</tr>")
+
+                return '<table class="manual-table">' + thead + "<tbody>" + "".join(tbody_rows) + "</tbody></table>"
+
+            # 連続段落のバッファ
+            paragraph_buf: List[str] = []
+
+            def _flush_paragraph():
+                nonlocal paragraph_buf
+                if paragraph_buf:
+                    _emit_paragraph(paragraph_buf)
+                    paragraph_buf = []
+
+            i = 0
+            in_code_fence = False
+            code_buf: List[str] = []
+            while i < len(lines):
+                line = lines[i].rstrip("\n")
+                stripped = line.strip()
+
+                # コードフェンス
+                if stripped.startswith("```"):
+                    if not in_code_fence:
+                        _flush_paragraph()
+                        _close_list()
+                        in_code_fence = True
+                        code_buf = []
+                    else:
+                        # 閉じ
+                        code_html = html.escape("\n".join(code_buf))
+                        out.append(f'<pre class="manual-pre"><code>{code_html}</code></pre>')
+                        in_code_fence = False
+                        code_buf = []
+                    i += 1
+                    continue
+                if in_code_fence:
+                    code_buf.append(line)
+                    i += 1
+                    continue
+
+                # 空行
+                if stripped == "":
+                    _flush_paragraph()
+                    i += 1
+                    continue
+
+                # 区切り線
+                if stripped == "---":
+                    _flush_paragraph()
+                    _close_list()
+                    out.append("<hr/>")
+                    i += 1
+                    continue
+
+                # 見出し
+                m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+                if m:
+                    _flush_paragraph()
+                    _close_list()
+                    level = len(m.group(1))
+                    title = m.group(2).strip()
+                    # 目次アンカーに合わせる（過剰にURL化せず、そのままidに）
+                    hid = _slugify_heading(title)
+                    tag = f"h{min(level,3)}"  # h4+は h3 に寄せる
+                    out.append(f'<{tag} id="{html.escape(hid, quote=True)}">{_process_inline(title)}</{tag}>')
+                    i += 1
+                    continue
+
+                # 引用
+                if stripped.startswith(">"):
+                    _flush_paragraph()
+                    _close_list()
+                    quote_lines = []
+                    while i < len(lines) and lines[i].strip().startswith(">"):
+                        q = lines[i].strip()[1:].lstrip()
+                        quote_lines.append(q)
+                        i += 1
+                    quote_text = "<br/>".join([_process_inline(t) for t in quote_lines])
+                    out.append(f"<blockquote>{quote_text}</blockquote>")
+                    continue
+
+                # テーブル（連続行）
+                if _is_table_line(line):
+                    _flush_paragraph()
+                    _close_list()
+                    tbl: List[str] = []
+                    while i < len(lines) and _is_table_line(lines[i]):
+                        tbl.append(lines[i])
+                        i += 1
+                    out.append(_parse_table(tbl))
+                    continue
+
+                # リスト（簡易：入れ子は非対応、連続をまとめる）
+                ulm = re.match(r"^\s*[-*]\s+(.*)$", line)
+                olm = re.match(r"^\s*(\d+)\.\s+(.*)$", line)
+                if ulm or olm:
+                    _flush_paragraph()
+                    if olm:
+                        list_tag = "ol"
+                        item_text = olm.group(2).strip()
+                    else:
+                        list_tag = "ul"
+                        item_text = ulm.group(1).strip()
+
+                    if current_list_tag != list_tag:
+                        _close_list()
+                        current_list_tag = list_tag
+                        out.append(f"<{current_list_tag}>")
+
+                    out.append(f"<li>{_process_inline(item_text)}</li>")
+                    i += 1
+                    continue
+                else:
+                    # リスト外ならバッファへ
+                    paragraph_buf.append(line)
+                    i += 1
+
+            _flush_paragraph()
+            _close_list()
+
+            return "\n".join(out)
+
+        # CSSとHTMLの枠
+        html_body = _convert_md_to_html(manual_text)
+        html_content = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FALCON2 使用説明書</title>
+  <style>
+    body {{
+      font-family: "Meiryo UI", "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 18px;
+      background: #f5f5f5;
+      color: #263238;
+      line-height: 1.6;
+      font-size: 13px;
+    }}
+    .wrap {{
+      max-width: 980px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 18px 20px;
+      border-radius: 10px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }}
+    h1, h2, h3 {{
+      color: #1e3a5f;
+      margin: 20px 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #e6edf3;
+      line-height: 1.3;
+    }}
+    h1 {{ font-size: 18px; }}
+    h2 {{ font-size: 15px; }}
+    h3 {{ font-size: 13.5px; }}
+    p {{ margin: 8px 0; }}
+    hr {{
+      border: none;
+      border-top: 1px solid #e6edf3;
+      margin: 14px 0;
+    }}
+    blockquote {{
+      margin: 10px 0;
+      padding: 10px 12px;
+      background: #f0f7ff;
+      border-left: 4px solid #3b82f6;
+      border-radius: 6px;
+      color: #1f3b57;
+    }}
+    ul, ol {{
+      margin: 8px 0 8px 22px;
+      padding: 0;
+    }}
+    li {{ margin: 4px 0; }}
+    a {{ color: #1565c0; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    code {{
+      font-family: "Consolas","Courier New",monospace;
+      font-size: 12px;
+      background: #f3f4f6;
+      padding: 1px 4px;
+      border-radius: 6px;
+    }}
+    .manual-pre {{
+      background: #0b1220;
+      color: #e5e7eb;
+      border-radius: 10px;
+      padding: 12px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }}
+    .manual-pre code {{
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+      font-size: 12px;
+    }}
+    .manual-table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0;
+      font-size: 12px;
+    }}
+    .manual-table th, .manual-table td {{
+      border: 1px solid #e6edf3;
+      padding: 6px 8px;
+      vertical-align: top;
+    }}
+    .manual-table th {{
+      background: #f8fafc;
+      color: #1e3a5f;
+      font-weight: 700;
+      width: 20%;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    {html_body}
+  </div>
+</body>
+</html>"""
+
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".html", delete=False) as f:
+            f.write(html_content)
+            temp_file_path = f.name
+        webbrowser.open(f"file://{temp_file_path}")
+
     def _on_milk_test_report(self, parent_dialog: Optional[tk.Toplevel] = None):
         """乳検データ出力（乳検日を選択して表示）"""
         try:
@@ -2533,8 +3081,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             logging.error(f"乳検データ出力エラー: {e}", exc_info=True)
             messagebox.showerror("エラー", f"乳検データ出力に失敗しました: {e}")
 
-    def _on_milk_test_report_builder(self, use_ai: bool = True):
-        """レポート作成＞乳検レポート（乳検日選択まで）。use_ai=False のときは前月比較（AI）をスキップしAPIに依存しない。"""
+    def _on_milk_test_report_builder(self):
+        """レポート作成＞乳検レポート（乳検日選択まで）。"""
         try:
             selected_date = self._select_milk_test_event_date()
             if not selected_date:
@@ -2557,6 +3105,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             parity_counts = {"1": 0, "2": 0, "3+": 0}  # 3つのカテゴリ（1産、2産、3産以上）
             milk_scatter_points: List[Tuple[int, float, int, str, str]] = []
             ls_scatter_points: List[Tuple[int, float, int, str, str]] = []
+            cow_data_list: List[Dict[str, Any]] = []  # ①③⑤用
 
             def calc_dim_on_date(clvd_date: Optional[str], event_date: str) -> Optional[int]:
                 if not clvd_date:
@@ -2737,7 +3286,30 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     except (ValueError, TypeError):
                         pass
 
+                # ①③⑤用: 脂肪酸・タンパク質を収集して cow_data_list に追加
+                def _safe_float(val: Any) -> Optional[float]:
+                    if val in ("", None):
+                        return None
+                    try:
+                        return float(val)
+                    except (ValueError, TypeError):
+                        return None
+                cow_data_list.append({
+                    "cow_id": str(cow.get("cow_id") or cow_auto_id) if cow else str(cow_auto_id),
+                    "dim":    dim,
+                    "lact":   int(cow.get("lact") or 0) if cow else 0,
+                    "milk":   _safe_float(json_data.get("milk_yield")),
+                    "scc":    _safe_float(json_data.get("scc")),
+                    "ls":     _safe_float(json_data.get("ls")),
+                    "fat":         _safe_float(json_data.get("fat")),
+                    "protein":     _safe_float(json_data.get("protein")),
+                    "denovo_fa":   _safe_float(json_data.get("denovo_fa")),
+                    "mixed_fa":    _safe_float(json_data.get("mixed_fa")),
+                    "preformed_fa":_safe_float(json_data.get("preformed_fa")),
+                })
+
             cow_count = len(cow_ids)
+            # ③①用の個体データリストはここで完成
             avg_dim = round(sum(dim_values) / len(dim_values), 1) if dim_values else None
             avg_milk = round(sum(milk_values) / len(milk_values), 1) if milk_values else None
             max_milk = None
@@ -2909,6 +3481,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             parous_milk_target = farm_goals.get("milk_100d_parous")
             if parous_milk_target is None:
                 parous_milk_target = 40
+            # ⑤目標バッジ用の追加目標値（farm_goals にそのまま渡す）
 
             # 前月の乳検日（前月のカレンダー月で最新の検定日）と前月集計
             prev_month_date: Optional[str] = None
@@ -3462,74 +4035,6 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                 },
             }
 
-            # 生成AIで前月比較を取得（use_ai=True かつ API利用可能時のみ）
-            ai_comparison_bullets = ""
-            if use_ai:
-                try:
-                    client = ChatGPTClient()
-                    cur = [
-                        f"検定日: {selected_date}",
-                        f"検定牛頭数: {cow_count} 頭",
-                        f"平均搾乳日数(DIM): {avg_dim if avg_dim is not None else '-'}",
-                        f"平均乳量: {f'{avg_milk:.1f}' if avg_milk is not None else '-'} kg（前回: {f'{prev_avg_milk:.1f}' if prev_avg_milk is not None else '-'} kg）",
-                        f"最高乳量: {f'{max_milk:.1f}' if max_milk is not None else '-'} kg、最低: {f'{min_milk:.1f}' if min_milk is not None else '-'} kg",
-                        f"平均体細胞: {avg_scc_display if avg_scc_display is not None else '-'} 千、平均リニアスコア: {avg_ls if avg_ls is not None else '-'}、LS2以下割合: {ls_under_2_rate if ls_under_2_rate is not None else '-'}%",
-                        f"SCC目標超え: {len(scc_over_rows)} 頭、初産DIM100以内目標未満: {len(heifer_under_rows)} 頭、経産同: {len(parous_under_rows)} 頭",
-                        f"乳量15%減: {len(milk_drop_rows)} 頭、BHB0.13以上: {len(bhb_over_rows)} 頭、デノボ不足(60日以内22%未満): {len(denovo_under_rows)} 頭、61日以上28%未満: {len(denovo_under_61_rows)} 頭",
-                    ]
-                    prev_lines: List[str] = []
-                    if prev_month_date and prev_month_cow_count is not None:
-                        prev_lines = [
-                            f"前月検定日: {prev_month_date}",
-                            f"前月検定頭数: {prev_month_cow_count} 頭",
-                            f"前月平均乳量: {prev_month_avg_milk if prev_month_avg_milk is not None else '-'} kg",
-                            f"前月平均体細胞: {prev_month_avg_scc if prev_month_avg_scc is not None else '-'} 千、平均LS: {prev_month_avg_ls if prev_month_avg_ls is not None else '-'}、LS2以下割合: {prev_month_ls_under_2_rate if prev_month_ls_under_2_rate is not None else '-'}%",
-                            f"前月SCC目標超え: {prev_month_scc_over_count if prev_month_scc_over_count is not None else '-'} 頭",
-                        ]
-                    user_text = "【今月の乳検サマリ】\n" + "\n".join(cur)
-                    if prev_lines:
-                        user_text += "\n\n【前月の乳検サマリ】\n" + "\n".join(prev_lines)
-                    else:
-                        user_text += "\n\n【前月】データなし"
-                    if prev_lines and individual_comparison_lines:
-                        user_text += "\n\n【個体別の前月→今月の変化（参考）】\n" + "\n".join(individual_comparison_lines)
-                    system_prompt = (
-                        "あなたは酪農・乳検データの分析専門家です。"
-                        "指示に従い、日本語で箇条書きのみを出力してください。"
-                        "文体は「です」「ます」の敬体で統一してください。"
-                        "番号や見出しは不要です。各項目は「・」で始める短い文にしてください。"
-                    )
-                    if prev_lines:
-                        # 前月との比較：集計の変化＋個体ごとのコメント（ID付きで前月→今月の状態を書く）
-                        comparison_prompt = (
-                            "以下は今月と前月の乳検サマリと、個体別の前月→今月の変化（該当する場合）です。\n\n"
-                            "「前月との比較」を箇条書きで書いてください。文末は「です」「ます」で統一してください。\n"
-                            "（1）集計の変化：検定頭数・平均乳量・平均体細胞などの前月からの増減を、前月の数値と対比して書いてください。\n"
-                            "（2）個体ごとのコメント：必ず含めてください。以下のような形で、個体IDを明示し、前月と今月の状態の違いが分かるように書いてください。\n"
-                            "　例：「前月はID100、200、201がSCC200以上でしたが、今月は200以下になりました。」\n"
-                            "　例：「ID200は前月はBHBで引っかかりませんでしたが、今月は引っかかっています（BHB＝2.0）。」\n"
-                            "　例：「ID50は前月は乳量15%減で該当していましたが、今月は該当外になりました。」\n"
-                            "改善した個体（前月該当→今月該当外）と、悪化した個体（前月は該当しなかったが今月該当）の両方を、SCC・乳量・BHBごとに箇条書きで書いてください。項目数は８項目以内を目安にしてください。\n\n" + user_text
-                        )
-                        ai_comparison_bullets = client.ask(system_prompt, comparison_prompt)
-                    else:
-                        ai_comparison_bullets = "・前月の乳検データがないため比較できません。"
-                except Exception as ai_err:
-                    logging.debug("乳検レポートAI要約スキップ: %s", ai_err)
-
-            # 前月との比較セクション（use_ai 時のみ出力）
-            ai_section_html = ""
-            if use_ai:
-                ai_bullets_text = html.escape(ai_comparison_bullets) if ai_comparison_bullets else "前月データがないため比較できません。"
-                ai_section_html = (
-                    '<div class="report-layout page-break-before ai-summary-page">'
-                    '<div style="width: 100%;">'
-                    '<div class="section-title">前月との比較</div>'
-                    '<div class="ai-summary-card">'
-                    f'<p class="ai-bullets">{ai_bullets_text}</p>'
-                    '</div></div></div>'
-                )
-
             # 乳量・リニアスコア散布図（Plotly でホバーID表示・2グラフ連動）
             milk_report_scatter_html = ""
             try:
@@ -3588,6 +4093,17 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
 
             trend_rows = compute_monthly_milk_trend(events, selected_date, 5)
             monthly_trend_html = build_monthly_trend_section_html(trend_rows)
+            trend_rows_12 = compute_monthly_milk_trend(events, selected_date, 12)
+            from modules.milk_report_extras import (
+                build_goal_badges_html, GOAL_BADGE_CSS,
+                build_dim_stage_section_html,
+                build_fatty_acid_section_html,
+                build_12month_trend_section_html,
+            )
+            goal_badges_html = build_goal_badges_html(avg_milk, avg_scc, avg_ls, farm_goals)
+            dim_stage_html   = build_dim_stage_section_html(cow_data_list)
+            fatty_acid_html  = build_fatty_acid_section_html(cow_data_list)
+            trend_12_html    = build_12month_trend_section_html(trend_rows_12)
             _comment_storage_key = make_milk_report_comment_storage_key(farm_name, selected_date)
             _comment_storage_key_js = json.dumps(_comment_storage_key, ensure_ascii=False)
             milk_report_comment_modal_html = build_comment_modal_html()
@@ -3599,6 +4115,25 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             except ImportError:
                 REPORT_BASE_CSS = ""
             milk_report_extra_css = """
+        /* ── レポートヘッダー タイトル差別化 ── */
+        .report-header { display:flex; flex-direction:column; gap:4px; }
+        .report-brand {
+            font-size: 1.45rem !important;
+            font-weight: 600 !important;
+            color: #0d6efd !important;
+            margin: 0 0 4px !important;
+            letter-spacing: 0.03em;
+            font-family: 'Meiryo', 'Yu Gothic', sans-serif !important;
+            order: -1;
+        }
+        .report-header dl { order: 1; }
+        .report-header dt { font-size: 11px; color: #90a4ae !important; font-weight: 400 !important; }
+        .report-header dd { font-size: 1.1rem; font-weight: 700 !important; color: #263238 !important; }
+        @media print {
+          .report-brand { font-size: 1.2rem !important; margin-bottom: 4px !important; }
+          .report-header dt { font-size: 10px !important; }
+          .report-header dd { font-size: 0.95rem !important; }
+        }
         .report-layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
         .chart-stack { display: flex; flex-direction: column; gap: 16px; }
         .scatter-stack { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
@@ -3663,7 +4198,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
           .milk-report-first-page .summary-table td { padding: 2px 4px; }
           .milk-report-first-page .donut-wrap svg { width: 88px; height: 88px; }
         }
-            """ + MILK_REPORT_COMMENT_CSS
+            """ + MILK_REPORT_COMMENT_CSS + GOAL_BADGE_CSS
             milk_report_css = (REPORT_BASE_CSS + milk_report_extra_css) if REPORT_BASE_CSS else "body{font-family:'Meiryo','Yu Gothic',sans-serif;font-size:12px;}.report-container{max-width:1200px;margin:0 auto;}.report-header{border-bottom:2px solid #0d6efd;padding-bottom:16px;}.section-title{color:#0d6efd;}.summary-table th{background:#e9ecef;border:1px solid #dee2e6;}"
 
             try:
@@ -3697,8 +4232,10 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
 <div id="main-content">
 <div class="milk-report-toolbar">
   <button type="button" class="btn-ghost btn-comment-mode" onclick="toggleCommentMode()">✏ コメントモード</button>
+  <button type="button" class="btn-ghost" onclick="window.print()">🖨 印刷</button>
 </div>
-<div id="s-overview" class="report-layout milk-report-first-page page-break-after">
+{goal_badges_html}
+<div id="s-overview" class="report-layout milk-report-first-page">
         <div>
             <table class="summary-table">
         <tr>
@@ -3766,7 +4303,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             </div>
         </div>
     </div>
-    <div id="s-milkquality" class="report-layout page-break-before page-break-after">
+    <div id="s-milkquality" class="report-layout page-break-before">
         <div style="width: 100%;">
             <div class="section-title">乳質</div>
             <div class="subheader">体細胞 {html.escape(str(scc_threshold))}（千）以上の個体リスト</div>
@@ -3843,7 +4380,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             </div>
         </div>
     </div>
-    <div id="s-firstparity" class="report-layout page-break-before page-break-after">
+    {dim_stage_html}
+    <div id="s-firstparity" class="report-layout page-break-before">
         <div style="width: 100%;">
             <div class="section-title">初産成績</div>
             <div class="subheader">初産で分娩後100日以内かつ乳量{html.escape(str(heifer_milk_target))}kg以下の個体リスト</div>
@@ -3884,7 +4422,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             </div>
         </div>
     </div>
-    <div id="s-multiparity" class="report-layout page-break-before page-break-after">
+    <div id="s-multiparity" class="report-layout page-break-before">
         <div style="width: 100%;">
             <div class="section-title">２産以上成績</div>
             <div class="subheader">経産で分娩後100日以内かつ乳量{html.escape(str(parous_milk_target))}kg以下の個体リスト</div>
@@ -4070,8 +4608,9 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         </div>
     </div>
     {monthly_trend_html}
+    {fatty_acid_html}
+    {trend_12_html}
     <div id="s-cowlist" class="report-section-anchor" style="height:1px;margin:0;padding:0;border:0;overflow:hidden" aria-hidden="true"></div>
-    {ai_section_html}
 </div>
 {milk_report_comment_modal_html}
     <script>
@@ -4768,19 +5307,28 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
     def _on_farm_management(self):
         """農場管理メニューをクリック"""
         from ui.farm_management_window import FarmManagementWindow
-        
+
+        # 既に開いていれば前面に出す
+        if (self._farm_management_window is not None
+                and self._farm_management_window.window.winfo_exists()):
+            self._farm_management_window.window.lift()
+            self._farm_management_window.window.focus_set()
+            return
+
         def on_farm_changed(farm_path: Path):
             """農場が変更された時のコールバック"""
-            # 農場を自動的に切り替え
             self._switch_farm(farm_path)
-        
-        # 農場管理ウィンドウを表示
+
         farm_management_window = FarmManagementWindow(
             parent=self.root,
             current_farm_path=self.farm_path,
             on_farm_changed=on_farm_changed
         )
-        farm_management_window.show()
+        self._farm_management_window = farm_management_window
+        self._register_window('farm_management', farm_management_window.window, '農場管理')
+        farm_management_window.show()  # wait_window（ブロック）
+        self._farm_management_window = None
+        self._unregister_window('farm_management')
     
     def _switch_farm(self, new_farm_path: Path):
         """
@@ -4902,11 +5450,26 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
     def _on_app_settings(self):
         """アプリ設定メニューをクリック"""
         from ui.app_settings_window import AppSettingsWindow
-        
+
+        # 既に開いていれば前面に出す
+        if (self._app_settings_window is not None
+                and self._app_settings_window.window.winfo_exists()):
+            self._app_settings_window.window.lift()
+            self._app_settings_window.window.focus_set()
+            return
+
+        def _on_app_settings_closed():
+            self._app_settings_window = None
+            self._unregister_window('app_settings')
+
         app_settings_window = AppSettingsWindow(
             parent=self.root,
             on_settings_changed=self._on_app_settings_changed
         )
+        self._app_settings_window = app_settings_window
+        app_settings_window.window.protocol("WM_DELETE_WINDOW",
+            lambda: (_on_app_settings_closed(), app_settings_window.window.destroy()))
+        self._register_window('app_settings', app_settings_window.window, 'アプリ設定')
         app_settings_window.show()
     
     def _on_app_settings_changed(self):
@@ -5069,7 +5632,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     self.command_entry.set("集計したい項目を選んでください")
                     self.command_entry.config(foreground="gray")
                     self.command_placeholder_shown = True
-                elif selected_type == "受胎率（経産）":
+                elif selected_type in ("受胎率（経産）", "受胎率（未経産）"):
                     self.command_entry.set("")
                     self.command_entry.config(foreground="black")
                     self.command_placeholder_shown = False
@@ -5302,7 +5865,22 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             self.conception_rate_condition_entry.insert(0, self.conception_rate_condition_placeholder)
             self.conception_rate_condition_entry.config(foreground="gray")
             self.conception_rate_condition_placeholder_shown = True
-    
+
+    def _on_pregnancy_rate_condition_focus_in(self, event):
+        """妊娠率条件入力欄にフォーカスが入った時"""
+        if self.pregnancy_rate_condition_placeholder_shown:
+            self.pregnancy_rate_condition_entry.delete(0, tk.END)
+            self.pregnancy_rate_condition_entry.config(foreground="black")
+            self.pregnancy_rate_condition_placeholder_shown = False
+
+    def _on_pregnancy_rate_condition_focus_out(self, event):
+        """妊娠率条件入力欄からフォーカスが外れた時"""
+        current_text = self.pregnancy_rate_condition_entry.get().strip()
+        if not current_text:
+            self.pregnancy_rate_condition_entry.insert(0, self.pregnancy_rate_condition_placeholder)
+            self.pregnancy_rate_condition_entry.config(foreground="gray")
+            self.pregnancy_rate_condition_placeholder_shown = True
+
     def _toggle_event_selection_popup(self):
         """イベント選択ポップアップを開閉"""
         if self.event_selection_popup is None or not self.event_selection_popup.winfo_exists():
@@ -5662,8 +6240,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     _cls = self.classification_entry.get().strip()
                 user_input_for_display = "頭数" + ("：" + _cls if _cls else "")
         
-        # 受胎率・グラフ・集計（経産牛）の場合は、コマンド入力欄が空でも処理を続行（集計は空欄時は頭数を表示）
-        if not raw_input and selected_type not in ["受胎率（経産）", "グラフ", "集計（経産牛）"]:
+        # 受胎率・妊娠率・グラフ・集計（経産牛）の場合は、コマンド入力欄が空でも処理を続行（集計は空欄時は頭数を表示）
+        if not raw_input and selected_type not in ["受胎率（経産）", "受胎率（未経産）", "妊娠率", "妊娠率（DIM）", "グラフ", "集計（経産牛）"]:
             return
         
         # タイプが選択されている場合、自動的にプレフィックスを付与
@@ -5770,6 +6348,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         elif selected_type:
             prefix_map = {
                 "受胎率（経産）": "受胎率：",
+                "受胎率（未経産）": "受胎率：",
                 "集計（経産牛）": "集計：",
                 "グラフ": "グラフ："
             }
@@ -5873,10 +6452,23 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         self._record_command_history(actual_command, normalized_input)
         
         # 判定ロジック（優先順位順、厳守）
-        # ① 受胎率コマンド（受胎率タイプが選択されている場合）
-        if selected_type == "受胎率（経産）":
+        # ① 妊娠率コマンド
+        if selected_type == "妊娠率":
+            logging.info("妊娠率コマンドを実行します")
+            self._execute_pregnancy_rate_command()
+            return
+        elif selected_type == "妊娠率（DIM）":
+            logging.info("妊娠率（DIM別）コマンドを実行します")
+            self._execute_pregnancy_rate_dim_command()
+            return
+        # ② 受胎率コマンド（受胎率タイプが選択されている場合）
+        elif selected_type == "受胎率（経産）":
             logging.info(f"受胎率コマンドを実行します")
-            self._execute_conception_rate_command()
+            self._execute_conception_rate_command(cow_type="経産")
+            return
+        elif selected_type == "受胎率（未経産）":
+            logging.info(f"受胎率（未経産）コマンドを実行します")
+            self._execute_conception_rate_command(cow_type="未経産")
             return
         
         # ① 項目一括変更コマンド（項目一括変更タイプが選択されている場合）
@@ -5917,8 +6509,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         
         # ③ グラフコマンド（「グラフ：」で始まる）
         if actual_command.startswith("グラフ：") or actual_command.startswith("グラフ:") or actual_command.startswith("散布図：") or actual_command.startswith("散布図:"):
-            # グラフタブを選択してから処理
-            self.result_notebook.select(1)  # 1番目のタブ（グラフタブ）
+            # 表タブで結果表示（散布図・表は result エリアに出る）
+            self.result_notebook.select(0)
             if not self._prompt_monthly_milk_test_months_for_command(actual_command):
                 self.add_message(role="system", text="月の指定がキャンセルされました。")
                 return
@@ -6044,6 +6636,56 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         if history_updated:
             self._save_command_history()
     
+    def _find_event_by_name(self, query: str) -> Optional[int]:
+        """event_dictionary で alias または name_jp が query に前方一致するイベント番号を返す。"""
+        if not query or not str(query).strip():
+            return None
+        q = str(query).strip().lower()
+        paths_to_try: List[Path] = []
+        if hasattr(self, "farm_path") and self.farm_path:
+            farm_config = Path(self.farm_path) / "config" / "event_dictionary.json"
+            if farm_config.exists():
+                paths_to_try.append(farm_config)
+        if hasattr(self, "event_dict_path") and self.event_dict_path:
+            p = Path(self.event_dict_path) if not isinstance(self.event_dict_path, Path) else self.event_dict_path
+            paths_to_try.append(p)
+        if not paths_to_try:
+            paths_to_try.append(Path(__file__).resolve().parent.parent / "config_default" / "event_dictionary.json")
+        for path in paths_to_try:
+            path = Path(path) if not isinstance(path, Path) else path
+            if not path.exists():
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                logging.debug("_find_event_by_name: 読み込みスキップ %s: %s", path, e)
+                continue
+
+            def _sort_key(k: str) -> int:
+                try:
+                    return int(k)
+                except (ValueError, TypeError):
+                    return 10**9
+
+            for event_num_str in sorted(data.keys(), key=_sort_key):
+                event_data = data.get(event_num_str) or {}
+                if event_data.get("deprecated", False):
+                    continue
+                try:
+                    event_number = int(event_num_str)
+                except (ValueError, TypeError):
+                    continue
+                alias = (event_data.get("alias") or "").strip()
+                name_jp = (event_data.get("name_jp") or "").strip()
+                al = alias.lower()
+                nj = name_jp.lower()
+                if al and al.startswith(q):
+                    return event_number
+                if nj and nj.startswith(q):
+                    return event_number
+        return None
+    
     def _on_command_type_selected(self, event=None):
         """コマンドタイプが選択された時（command_entry用）"""
         selected_type = self.command_type_var.get()
@@ -6053,8 +6695,50 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             if hasattr(self, 'command_entry') and self.command_entry.winfo_exists():
                 self._update_command_history_dropdown()
         
+        # 妊娠率タイプが選択された場合
+        if selected_type in ("妊娠率", "妊娠率（DIM）"):
+            # 他のフレームを非表示
+            if hasattr(self, 'event_selection_frame'):
+                self.event_selection_frame.pack_forget()
+            if hasattr(self, 'graph_input_frame'):
+                self.graph_input_frame.pack_forget()
+            if hasattr(self, 'condition_frame'):
+                self.condition_frame.pack_forget()
+            if hasattr(self, 'conception_rate_frame'):
+                self.conception_rate_frame.pack_forget()
+            # コマンド入力欄を無効化
+            if hasattr(self, 'command_entry') and self.command_entry.winfo_exists():
+                self.command_entry.set("")
+                self.command_entry.config(state="disabled")
+                self.command_placeholder_shown = False
+            # 妊娠率フレームを表示
+            if hasattr(self, 'pregnancy_rate_frame'):
+                if hasattr(self, 'latest_dates_frame'):
+                    self.pregnancy_rate_frame.pack(fill=tk.X, padx=10, pady=5, before=self.latest_dates_frame)
+                else:
+                    self.pregnancy_rate_frame.pack(fill=tk.X, padx=10, pady=5)
+            # 期間設定フレームを表示
+            if hasattr(self, 'period_frame'):
+                if hasattr(self, 'latest_dates_frame'):
+                    self.period_frame.pack(fill=tk.X, padx=10, pady=5, before=self.latest_dates_frame)
+                else:
+                    self.period_frame.pack(fill=tk.X, padx=10, pady=5)
+            # デフォルト期間: 今日から18サイクル（378日）前〜今日
+            if hasattr(self, 'start_date_entry') and hasattr(self, 'end_date_entry'):
+                from datetime import datetime, timedelta
+                today = datetime.now()
+                end_date = today.strftime('%Y-%m-%d')
+                start_date = (today - timedelta(days=378)).strftime('%Y-%m-%d')
+                self.start_date_entry.delete(0, tk.END)
+                self.start_date_entry.insert(0, start_date)
+                self.start_date_entry.config(foreground="black")
+                self.start_date_placeholder_shown = False
+                self.end_date_entry.delete(0, tk.END)
+                self.end_date_entry.insert(0, end_date)
+                self.end_date_entry.config(foreground="black")
+                self.end_date_placeholder_shown = False
         # 受胎率タイプが選択された場合
-        if selected_type == "受胎率（経産）":
+        elif selected_type in ("受胎率（経産）", "受胎率（未経産）"):
             # イベント選択フレームを非表示
             if hasattr(self, 'event_selection_frame'):
                 self.event_selection_frame.pack_forget()
@@ -6064,13 +6748,13 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # 条件入力欄を非表示
             if hasattr(self, 'condition_frame'):
                 self.condition_frame.pack_forget()
-            
+
             # コマンド入力欄を無効化（記入できないようにする）
             if hasattr(self, 'command_entry') and self.command_entry.winfo_exists():
                 self.command_entry.set("")
                 self.command_entry.config(state="disabled")
                 self.command_placeholder_shown = False
-            
+
             # 受胎率フレームを表示
             if hasattr(self, 'conception_rate_frame'):
                 # latest_dates_frameの前に配置
@@ -6078,12 +6762,16 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     self.conception_rate_frame.pack(fill=tk.X, padx=10, pady=5, before=self.latest_dates_frame)
                 else:
                     self.conception_rate_frame.pack(fill=tk.X, padx=10, pady=5)
-            
-            # 受胎率の種類の選択肢を明示的に再設定
+
+            # 受胎率の種類の選択肢を経産/未経産で切り替え
             if hasattr(self, 'conception_rate_type_entry'):
-                conception_rate_type_options = ["月", "産次", "授精回数", "DIMサイクル", "授精種類", "授精間隔", "授精師", "SIRE"]
+                if selected_type == "受胎率（未経産）":
+                    conception_rate_type_options = ["月", "授精回数", "授精種類", "授精間隔", "授精師", "SIRE"]
+                else:
+                    conception_rate_type_options = ["月", "産次", "授精回数", "DIMサイクル", "授精種類", "授精間隔", "授精師", "SIRE"]
                 self.conception_rate_type_entry['values'] = conception_rate_type_options
-            
+                self.conception_rate_type_entry.set("")
+
             # 期間設定フレームを表示
             if hasattr(self, 'period_frame'):
                 # conception_rate_frameの後に配置
@@ -6091,7 +6779,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     self.period_frame.pack(fill=tk.X, padx=10, pady=5, before=self.latest_dates_frame)
                 else:
                     self.period_frame.pack(fill=tk.X, padx=10, pady=5)
-            
+
             # デフォルト期間を設定（30日前からさかのぼって1年間）
             if hasattr(self, 'start_date_entry') and hasattr(self, 'end_date_entry'):
                 from datetime import datetime, timedelta
@@ -6115,6 +6803,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # 受胎率フレームを非表示
             if hasattr(self, 'conception_rate_frame'):
                 self.conception_rate_frame.pack_forget()
+            if hasattr(self, 'pregnancy_rate_frame'):
+                self.pregnancy_rate_frame.pack_forget()
             # グラフ入力フレームを非表示
             if hasattr(self, 'graph_input_frame'):
                 self.graph_input_frame.pack_forget()
@@ -6173,6 +6863,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # 受胎率フレームを非表示
             if hasattr(self, 'conception_rate_frame'):
                 self.conception_rate_frame.pack_forget()
+            if hasattr(self, 'pregnancy_rate_frame'):
+                self.pregnancy_rate_frame.pack_forget()
             # グラフ入力フレームを非表示
             if hasattr(self, 'graph_input_frame'):
                 self.graph_input_frame.pack_forget()
@@ -6219,6 +6911,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # 受胎率フレームを非表示
             if hasattr(self, 'conception_rate_frame'):
                 self.conception_rate_frame.pack_forget()
+            if hasattr(self, 'pregnancy_rate_frame'):
+                self.pregnancy_rate_frame.pack_forget()
             # グラフ入力フレームを非表示
             if hasattr(self, 'graph_input_frame'):
                 self.graph_input_frame.pack_forget()
@@ -6287,6 +6981,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # 受胎率フレームを非表示
             if hasattr(self, 'conception_rate_frame'):
                 self.conception_rate_frame.pack_forget()
+            if hasattr(self, 'pregnancy_rate_frame'):
+                self.pregnancy_rate_frame.pack_forget()
             if hasattr(self, 'graph_input_frame'):
                 self.graph_input_frame.pack_forget()
             # イベント選択フレームを非表示
@@ -6375,6 +7071,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # 受胎率フレームを非表示
             if hasattr(self, 'conception_rate_frame'):
                 self.conception_rate_frame.pack_forget()
+            if hasattr(self, 'pregnancy_rate_frame'):
+                self.pregnancy_rate_frame.pack_forget()
             # イベント選択フレームを非表示
             if hasattr(self, 'event_selection_frame'):
                 self.event_selection_frame.pack_forget()
@@ -6453,6 +7151,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # タイプが空欄・項目一括変更など：コマンド入力を有効化
             if hasattr(self, 'conception_rate_frame'):
                 self.conception_rate_frame.pack_forget()
+            if hasattr(self, 'pregnancy_rate_frame'):
+                self.pregnancy_rate_frame.pack_forget()
             if hasattr(self, 'condition_frame'):
                 self.condition_frame.pack_forget()
             if hasattr(self, 'period_frame'):
@@ -10977,14 +11677,41 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             logging.error("操作ログ表示エラー: %s", e, exc_info=True)
     
     def _on_main_result_notebook_tab_changed(self, event=None):
-        """操作ログタブ選択時に最新化（インデックス: 0=表 1=グラフ 2=操作ログ）"""
+        """操作ログタブ選択時に最新化（インデックス: 0=表 1=操作ログ 2=メッセージ）"""
         try:
             idx = self.result_notebook.index(self.result_notebook.select())
-            if idx == 2:
+            if idx == 1:
                 self._refresh_main_activity_log()
         except Exception:
             pass
     
+    def add_message(self, role: str = "system", text: str = "") -> None:
+        """コマンド実行のテキストメッセージをメッセージタブに追記する。"""
+        if not text:
+            return
+        if not hasattr(self, "message_log_text"):
+            logging.info("[message] %s: %s", role, text)
+            return
+        try:
+            w = self.message_log_text
+            if not w.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        labels = {"user": "【入力】", "system": "【システム】", "ai": "【結果】"}
+        prefix = labels.get(role, f"【{role}】")
+        block = f"{prefix}\n{text}\n\n"
+        try:
+            w.configure(state=tk.NORMAL)
+            w.insert(tk.END, block)
+            w.see(tk.END)
+        finally:
+            w.configure(state=tk.DISABLED)
+
+    def _add_chat_message(self, sender: str, text: str) -> None:
+        """後方互換: システム通知をメッセージ欄へ（sender は現状テキストに含めない）。"""
+        self.add_message(role="system", text=text)
+
     def _clear_result_display(self):
         """
         結果表示エリアをクリア（表タブとグラフタブの両方）
@@ -11002,18 +11729,10 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         self.current_graph_command = None
         if hasattr(self, 'table_command_text') and self.table_command_text.winfo_exists():
             self._update_command_text(self.table_command_text, "")
-        if hasattr(self, 'graph_command_text') and self.graph_command_text.winfo_exists():
-            self._update_command_text(self.graph_command_text, "")
         if hasattr(self, 'table_export_btn') and self.table_export_btn.winfo_exists():
             self.table_export_btn.config(state=tk.DISABLED)
         if hasattr(self, 'table_print_btn') and self.table_print_btn.winfo_exists():
             self.table_print_btn.config(state=tk.DISABLED)
-        
-        # グラフタブをクリア
-        if hasattr(self, 'graph_frame'):
-            # graph_frame内のすべてのウィジェットを削除
-            for widget in self.graph_frame.winfo_children():
-                widget.destroy()
         
         # 散布図フレームもクリア（チャット画面内の散布図用）
         if hasattr(self, 'scatter_plot_frame'):
@@ -11473,10 +12192,20 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             return False
         
         try:
-            # 新しいウィンドウを作成
+            # 新しいウィンドウを作成（メイン画面の右側に配置）
             graph_window = tk.Toplevel(self.root)
             graph_window.title(f"グラフ: {aggregate_item_name} × {classification}")
-            graph_window.geometry("800x600")
+            self.root.update_idletasks()
+            _win_w, _win_h = 800, 600
+            _screen_w = self.root.winfo_screenwidth()
+            _screen_h = self.root.winfo_screenheight()
+            _gx = self.root.winfo_x() + int(self.root.winfo_width() * 0.45)
+            _gy = self.root.winfo_y() + 200
+            if _gx + _win_w > _screen_w:
+                _gx = max(0, _screen_w - _win_w - 10)
+            if _gy + _win_h > _screen_h:
+                _gy = max(0, _screen_h - _win_h - 40)
+            graph_window.geometry(f"{_win_w}x{_win_h}+{_gx}+{_gy}")
             
             # コマンド表示
             if command:
@@ -11496,8 +12225,6 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # コマンド情報を保存
             if command:
                 self.current_graph_command = command
-                if hasattr(self, 'graph_command_text') and self.graph_command_text.winfo_exists():
-                    self._update_command_text(self.graph_command_text, f"コマンド: {command}")
             
             # 分類列と平均値列、頭数列を取得
             classification_col = display_columns[0] if len(display_columns) > 0 else None
@@ -12834,6 +13561,118 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         # 個体リストを表示
         self._show_aggregate_cow_list(cow_auto_ids, title, {})
     
+    def _collect_result_table_rows(self) -> Tuple[List[str], List[List[str]]]:
+        """結果表（result_treeview）から列名と行データを取得する。"""
+        if not hasattr(self, 'result_treeview'):
+            return [], []
+        try:
+            if not self.result_treeview.winfo_exists():
+                return [], []
+        except tk.TclError:
+            return [], []
+        columns = list(self.result_treeview['columns'])
+        rows: List[List[str]] = []
+        for item_id in self.result_treeview.get_children():
+            vals = self.result_treeview.item(item_id, 'values')
+            row: List[str] = []
+            for i, _col in enumerate(columns):
+                if i < len(vals):
+                    v = vals[i]
+                    row.append(str(v) if v is not None else '')
+                else:
+                    row.append('')
+            rows.append(row)
+        return columns, rows
+
+    def _on_export_table_to_excel(self) -> None:
+        """表タブの内容を .xlsx または .csv で保存する（pandas/openpyxl があれば xlsx）。"""
+        columns, rows = self._collect_result_table_rows()
+        if not columns or not rows:
+            messagebox.showinfo("情報", "エクスポートする表データがありません。", parent=self.root)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="表を保存",
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel ブック", "*.xlsx"),
+                ("CSV（Excelで開けます）", "*.csv"),
+                ("すべてのファイル", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        lower = path.lower()
+        try:
+            if lower.endswith('.xlsx'):
+                try:
+                    import pandas as pd
+                    df = pd.DataFrame(rows, columns=columns)
+                    df.to_excel(path, index=False, engine='openpyxl')
+                except Exception as e:
+                    logging.warning(f".xlsx 保存失敗、CSVにフォールバック: {e}")
+                    fallback = path[:-5] + '.csv' if lower.endswith('.xlsx') else path + '.csv'
+                    with open(fallback, 'w', encoding='utf-8-sig', newline='') as f:
+                        w = csv.writer(f)
+                        w.writerow(columns)
+                        w.writerows(rows)
+                    messagebox.showinfo(
+                        "完了",
+                        "Excel用ライブラリで .xlsx を保存できなかったため、CSV で保存しました。\n\n"
+                        f"{fallback}",
+                        parent=self.root,
+                    )
+                    return
+            else:
+                with open(path, 'w', encoding='utf-8-sig', newline='') as f:
+                    w = csv.writer(f)
+                    w.writerow(columns)
+                    w.writerows(rows)
+            messagebox.showinfo("完了", f"保存しました:\n{path}", parent=self.root)
+        except Exception as e:
+            logging.error(f"表エクスポートエラー: {e}", exc_info=True)
+            messagebox.showerror("エラー", f"保存に失敗しました:\n{e}", parent=self.root)
+
+    def _on_print_table(self) -> None:
+        """表タブの内容を印刷（Windows は関連付けの印刷ダイアログを試行）。"""
+        columns, rows = self._collect_result_table_rows()
+        if not columns or not rows:
+            messagebox.showinfo("情報", "印刷する表データがありません。", parent=self.root)
+            return
+        lines = ['\t'.join(columns)]
+        for row in rows:
+            lines.append('\t'.join(row))
+        text = '\n'.join(lines)
+        try:
+            if platform.system() == 'Windows':
+                with tempfile.NamedTemporaryFile(
+                    mode='w', encoding='utf-8-sig', suffix='.txt', delete=False
+                ) as f:
+                    f.write(text)
+                    tmp_path = f.name
+                try:
+                    os.startfile(tmp_path, 'print')
+                except OSError:
+                    os.startfile(tmp_path)
+                    messagebox.showinfo(
+                        "プリント",
+                        "印刷ダイアログを開けませんでした。テキストを開きました。\n"
+                        "メモ帳などから「ファイル」→「印刷」で印刷できます。",
+                        parent=self.root,
+                    )
+            else:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.root.update()
+                messagebox.showinfo(
+                    "プリント",
+                    "表をクリップボードにコピーしました。\nスプレッドシートに貼り付けて印刷できます。",
+                    parent=self.root,
+                )
+        except Exception as e:
+            logging.error(f"印刷準備エラー: {e}", exc_info=True)
+            messagebox.showerror("エラー", f"印刷の準備に失敗しました:\n{e}", parent=self.root)
+
     def _on_column_header_click(self, column: str):
         """
         列ヘッダークリック時の処理（ソート状態を循環させる）

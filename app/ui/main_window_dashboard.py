@@ -52,6 +52,246 @@ except ImportError:
     _build_plotly_scatter_divs_only = None
 
 
+def _build_inline_scatter(points, chart_id, title, x_label, y_label, x_key, y_key,
+                          color_fn=None, legend_html="", y_tick_labels=None, hline_default=None):
+    """
+    インラインSVG散布図を生成。クリックで牛カードへ。基準線（十字）機能付き。
+    points: [{"cow_id":..., "x_key_value":..., "y_key_value":..., ...}, ...]
+    """
+    if not points:
+        return f'<div class="section-title">{title}</div><div class="subnote" style="padding:20px;text-align:center;color:#aaa">データがありません</div>'
+
+    W, H = 560, 320
+    ML, MR, MT, MB = 52, 16, 28, 44
+
+    xs_raw = [p.get(x_key) for p in points]
+    ys_raw = [p.get(y_key) for p in points]
+
+    # X軸: 文字列の場合はカテゴリ（index）扱い
+    is_x_cat = isinstance(xs_raw[0], str) if xs_raw else False
+    if is_x_cat:
+        x_cats = list(dict.fromkeys(xs_raw))  # 順序保持ユニーク
+        x_nums = [x_cats.index(x) for x in xs_raw]
+        x_min, x_max = 0, max(len(x_cats)-1, 1)
+    else:
+        x_nums = [float(v) for v in xs_raw if v is not None]
+        x_min = min(x_nums) if x_nums else 0
+        x_max = max(x_nums) if x_nums else 1
+        if x_max == x_min: x_max = x_min + 1
+
+    ys_num = [float(v) for v in ys_raw if v is not None]
+    y_min = min(ys_num) if ys_num else 0
+    y_max = max(ys_num) if ys_num else 1
+    if y_max == y_min: y_max = y_min + 1
+
+    PW = W - ML - MR
+    PH = H - MT - MB
+
+    def px(xi):
+        return ML + (xi - x_min) / (x_max - x_min) * PW
+
+    def py(yi):
+        return MT + (1.0 - (yi - y_min) / (y_max - y_min)) * PH
+
+    # グリッド・軸ラベル
+    svg_parts = [f'<svg id="{chart_id}_svg" viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block;cursor:crosshair" xmlns="http://www.w3.org/2000/svg">']
+
+    # Y軸グリッド
+    if y_tick_labels:
+        y_ticks = list(y_tick_labels.keys())
+    else:
+        raw_range = y_max - y_min
+        step = max(1, round(raw_range / 5))
+        y_ticks = list(range(int(y_min), int(y_max)+1, step))
+
+    for yt in y_ticks:
+        yy = py(yt)
+        if MT <= yy <= MT + PH:
+            svg_parts.append(f'<line x1="{ML}" y1="{yy:.1f}" x2="{ML+PW}" y2="{yy:.1f}" stroke="#f0f0f0" stroke-width="1"/>')
+            label = y_tick_labels.get(yt, str(yt)) if y_tick_labels else str(yt)
+            svg_parts.append(f'<text x="{ML-4}" y="{yy+3:.1f}" text-anchor="end" font-size="8" fill="#888">{label}</text>')
+
+    # X軸グリッド・ラベル
+    if is_x_cat:
+        step_x = max(1, len(x_cats)//8)
+        for i, cat in enumerate(x_cats):
+            if i % step_x == 0:
+                xx = px(i)
+                svg_parts.append(f'<text x="{xx:.1f}" y="{MT+PH+14}" text-anchor="middle" font-size="7" fill="#888">{cat}</text>')
+    else:
+        raw_xrange = x_max - x_min
+        x_step = max(1, round(raw_xrange / 6))
+        xt = int(x_min)
+        while xt <= x_max:
+            xx = px(xt)
+            svg_parts.append(f'<line x1="{xx:.1f}" y1="{MT}" x2="{xx:.1f}" y2="{MT+PH}" stroke="#f0f0f0" stroke-width="1"/>')
+            svg_parts.append(f'<text x="{xx:.1f}" y="{MT+PH+14}" text-anchor="middle" font-size="8" fill="#888">{xt}</text>')
+            xt += x_step
+
+    # 軸線
+    svg_parts.append(f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT+PH}" stroke="#adb5bd" stroke-width="1.5"/>')
+    svg_parts.append(f'<line x1="{ML}" y1="{MT+PH:.1f}" x2="{ML+PW}" y2="{MT+PH:.1f}" stroke="#adb5bd" stroke-width="1.5"/>')
+
+    # 軸タイトル
+    svg_parts.append(f'<text x="{ML+PW//2}" y="{H-4}" text-anchor="middle" font-size="9" fill="#666">{x_label}</text>')
+    svg_parts.append(f'<text x="10" y="{MT+PH//2}" text-anchor="middle" font-size="9" fill="#666" transform="rotate(-90 10 {MT+PH//2})">{y_label}</text>')
+
+    # 基準線（固定）プレースホルダー
+    svg_parts.append(f'<line id="{chart_id}_hline" x1="{ML}" y1="-100" x2="{ML+PW}" y2="-100" stroke="#e53935" stroke-width="1.2" stroke-dasharray="5 3" opacity="0.8"/>')
+    svg_parts.append(f'<line id="{chart_id}_vline" x1="-100" y1="{MT}" x2="-100" y2="{MT+PH}" stroke="#e53935" stroke-width="1.2" stroke-dasharray="5 3" opacity="0.8"/>')
+    svg_parts.append(f'<text id="{chart_id}_hlabel" x="{ML+PW-2}" y="-100" text-anchor="end" font-size="8" fill="#e53935"></text>')
+    svg_parts.append(f'<text id="{chart_id}_vlabel" x="-100" y="{MT+12}" text-anchor="middle" font-size="8" fill="#e53935"></text>')
+
+    # カーソル基準線（移動中）
+    svg_parts.append(f'<line id="{chart_id}_chline" x1="{ML}" y1="-100" x2="{ML+PW}" y2="-100" stroke="#e53935" stroke-width="1" stroke-dasharray="3 2" opacity="0.5"/>')
+    svg_parts.append(f'<line id="{chart_id}_cvline" x1="-100" y1="{MT}" x2="-100" y2="{MT+PH}" stroke="#e53935" stroke-width="1" stroke-dasharray="3 2" opacity="0.5"/>')
+
+    # プロット点（cow_id をdata属性に）
+    for i, p in enumerate(points):
+        xi = x_cats.index(p.get(x_key)) if is_x_cat else float(p.get(x_key, 0))
+        yi = float(p.get(y_key, 0))
+        cx = px(xi)
+        cy = py(yi)
+        fill = color_fn(p) if color_fn else "#1565C0"
+        cow_id = p.get("cow_id", "")
+        svg_parts.append(
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="{fill}" opacity="0.72" '
+            f'stroke="white" stroke-width="0.8" '
+            f'data-cow="{cow_id}" data-xv="{p.get(x_key,"")}" data-yv="{p.get(y_key,"")}" '
+            f'style="cursor:pointer" class="{chart_id}_dot"/>'
+        )
+
+    svg_parts.append('</svg>')
+
+    svg_str = "\n".join(svg_parts)
+
+    # JavaScript（クリック→牛カード、基準線）
+    js = f"""
+<script>
+(function(){{
+  var chartId = '{chart_id}';
+  var svgEl = document.getElementById(chartId + '_svg');
+  if (!svgEl) return;
+  var crosshairActive = false;
+  // SVG座標系パラメータ
+  var ML={ML}, MR={MR}, MT={MT}, MB={MB}, W={W}, H={H};
+  var xMin={x_min if not is_x_cat else 0}, xMax={x_max if not is_x_cat else max(len(xs_raw)-1, 1)};
+  var yMin={y_min}, yMax={y_max};
+  var PW={PW}, PH={PH};
+
+  function svgPoint(e) {{
+    var rect = svgEl.getBoundingClientRect();
+    var scaleX = W / rect.width;
+    var scaleY = H / rect.height;
+    return {{
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    }};
+  }}
+
+  function toDataX(svgX) {{ return xMin + (svgX - ML) / PW * (xMax - xMin); }}
+  function toDataY(svgY) {{ return yMax - (svgY - MT) / PH * (yMax - yMin); }}
+
+  // ボタン
+  var btn = document.getElementById(chartId + '_btn');
+  if (btn) {{
+    btn.addEventListener('click', function() {{
+      crosshairActive = !crosshairActive;
+      btn.style.background = crosshairActive ? '#e53935' : '';
+      btn.style.color = crosshairActive ? '#fff' : '';
+      svgEl.style.cursor = crosshairActive ? 'crosshair' : 'default';
+      if (!crosshairActive) {{
+        document.getElementById(chartId+'_chline').setAttribute('y1','-100');
+        document.getElementById(chartId+'_chline').setAttribute('y2','-100');
+        document.getElementById(chartId+'_cvline').setAttribute('x1','-100');
+        document.getElementById(chartId+'_cvline').setAttribute('x2','-100');
+      }}
+    }});
+  }}
+
+  // マウス移動：カーソル基準線
+  svgEl.addEventListener('mousemove', function(e) {{
+    if (!crosshairActive) return;
+    var pt = svgPoint(e);
+    var svgX = Math.max(ML, Math.min(ML+PW, pt.x));
+    var svgY = Math.max(MT, Math.min(MT+PH, pt.y));
+    var chline = document.getElementById(chartId+'_chline');
+    var cvline = document.getElementById(chartId+'_cvline');
+    chline.setAttribute('y1', svgY.toFixed(1));
+    chline.setAttribute('y2', svgY.toFixed(1));
+    cvline.setAttribute('x1', svgX.toFixed(1));
+    cvline.setAttribute('x2', svgX.toFixed(1));
+  }});
+
+  // マウスが外れたらカーソル線を消す（固定線は維持）
+  svgEl.addEventListener('mouseleave', function() {{
+    if (!crosshairActive) return;
+    document.getElementById(chartId+'_chline').setAttribute('y1','-1000');
+    document.getElementById(chartId+'_chline').setAttribute('y2','-1000');
+    document.getElementById(chartId+'_cvline').setAttribute('x1','-1000');
+    document.getElementById(chartId+'_cvline').setAttribute('x2','-1000');
+  }});
+
+  // クリック：基準線モード中は十字を固定 / 通常モードはドットで牛カードへ
+  svgEl.addEventListener('click', function(e) {{
+    var target = e.target;
+    if (crosshairActive) {{
+      // 基準線モード：どこをクリックしても固定
+      var pt = svgPoint(e);
+      var svgX = Math.max(ML, Math.min(ML+PW, pt.x));
+      var svgY = Math.max(MT, Math.min(MT+PH, pt.y));
+      var hline = document.getElementById(chartId+'_hline');
+      var vline = document.getElementById(chartId+'_vline');
+      var hlabel = document.getElementById(chartId+'_hlabel');
+      var vlabel = document.getElementById(chartId+'_vlabel');
+      hline.setAttribute('y1', svgY.toFixed(1));
+      hline.setAttribute('y2', svgY.toFixed(1));
+      vline.setAttribute('x1', svgX.toFixed(1));
+      vline.setAttribute('x2', svgX.toFixed(1));
+      var dy = toDataY(svgY);
+      var dx = toDataX(svgX);
+      hlabel.setAttribute('y', (svgY - 3).toFixed(1));
+      hlabel.textContent = dy.toFixed(1);
+      vlabel.setAttribute('x', svgX.toFixed(1));
+      vlabel.setAttribute('y', (MT+11).toFixed(1));
+      vlabel.textContent = dx.toFixed(1);
+    }} else {{
+      // 通常モード：ドットクリックで牛カードへ
+      if (target.classList.contains(chartId+'_dot')) {{
+        var cowId = target.getAttribute('data-cow');
+        if (cowId && typeof FALCON_OPEN_COW_PORT !== 'undefined') {{
+          fetch('http://127.0.0.1:' + FALCON_OPEN_COW_PORT + '/open_cow?cow_id=' + encodeURIComponent(cowId)).catch(function(){{}});
+        }}
+      }}
+    }}
+  }});
+
+  // ダブルクリック：基準線リセット（固定線を消す）
+  svgEl.addEventListener('dblclick', function(e) {{
+    document.getElementById(chartId+'_hline').setAttribute('y1','-1000');
+    document.getElementById(chartId+'_hline').setAttribute('y2','-1000');
+    document.getElementById(chartId+'_vline').setAttribute('x1','-1000');
+    document.getElementById(chartId+'_vline').setAttribute('x2','-1000');
+    document.getElementById(chartId+'_hlabel').textContent='';
+    document.getElementById(chartId+'_vlabel').textContent='';
+  }});
+}})();
+</script>
+"""
+
+    btn_html = (
+        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+        f'<div class="section-title" style="margin:0">{title}</div>'
+        f'<button id="{chart_id}_btn" style="font-size:10px;padding:3px 10px;border:1px solid #e53935;'
+        f'border-radius:4px;background:#fff;color:#e53935;cursor:pointer;white-space:nowrap">＋ 基準線</button>'
+        f'</div>'
+    )
+    legend_div = f'<div style="font-size:9px;margin-bottom:4px;display:flex;gap:10px;flex-wrap:wrap">{legend_html}</div>' if legend_html else ''
+    hint = '<div style="font-size:8px;color:#bbb;margin-top:2px">基準線モード：クリックで固定 / ダブルクリックでリセット</div>'
+
+    return btn_html + legend_div + svg_str + hint + js
+
+
 class DashboardMixin:
     """Mixin: FALCON2 - ダッシュボード計算・HTML生成 Mixin"""
     def _is_cow_disposed_for_dashboard(self, cow_auto_id: int) -> bool:
@@ -165,7 +405,27 @@ class DashboardMixin:
             
             # 授精回数ごとの受胎率を計算
             insemination_count_fertility_stats = self._calculate_dashboard_insemination_count_fertility_stats()
-            
+
+            # 未経産牛の月ごと受胎率を計算
+            heifer_monthly_fertility_stats = self._calculate_dashboard_heifer_monthly_fertility_stats()
+
+            # DIMカテゴリ × 産次 分布
+            dim_parity_breakdown = self._calculate_dashboard_dim_parity_breakdown(lactated_cows)
+
+            # 授精種類別受胎率
+            ai_et_conception_stats = self._calculate_ai_et_conception_stats(lactated_cows)
+            # 初回授精DIM×分娩月日 散布図
+            first_ai_scatter = self._calculate_first_ai_dim_scatter(lactated_cows)
+            # RC×DIM 散布図
+            rc_dim_scatter = self._calculate_rc_dim_scatter(lactated_cows)
+
+            # 21日妊娠率・授精実施率を計算
+            pr_hdr_data = self._calculate_dashboard_pr_hdr()
+            repro_detail = self._calculate_dashboard_repro_detail()
+
+            # 累積妊娠頭数グラフ
+            cumulative_pregnancy_data = self._calculate_dashboard_cumulative_pregnancy()
+
             # 牛群動態（分娩予定月×産子種類）を計算
             herd_dynamics_data = None
             if self.farm_path:
@@ -189,6 +449,14 @@ class DashboardMixin:
                 scatter_data,
                 insemination_count_fertility_stats,
                 herd_dynamics_data,
+                pr_hdr_data=pr_hdr_data,
+                repro_detail=repro_detail,
+                heifer_monthly_fertility_stats=heifer_monthly_fertility_stats,
+                cumulative_pregnancy_data=cumulative_pregnancy_data,
+                dim_parity_breakdown=dim_parity_breakdown,
+                ai_et_conception_stats=ai_et_conception_stats,
+                first_ai_scatter=first_ai_scatter,
+                rc_dim_scatter=rc_dim_scatter,
             )
             
             # 一時HTMLファイルを作成
@@ -418,6 +686,162 @@ class DashboardMixin:
             logging.error(f"月ごと受胎率統計計算エラー: {e}", exc_info=True)
             return None
     
+    def _calculate_dashboard_heifer_monthly_fertility_stats(self):
+        """未経産牛の月ごとの受胎率統計を計算"""
+        from datetime import datetime, timedelta
+        try:
+            today = datetime.now()
+            end_date_dt = today - timedelta(days=30)
+            end_date = end_date_dt.strftime('%Y-%m-%d')
+            start_date_dt = end_date_dt - timedelta(days=365)
+            start_date = start_date_dt.strftime('%Y-%m-%d')
+            result = self._calculate_conception_rate(
+                self.db, "月", start_date, end_date, "", cow_type="未経産"
+            )
+            if not result:
+                return None
+            stats = result.get('stats', {})
+            if not stats:
+                return None
+            return {"stats": stats, "start_date": start_date, "end_date": end_date}
+        except Exception as e:
+            logging.error(f"未経産牛月ごと受胎率統計計算エラー: {e}", exc_info=True)
+            return None
+
+    def _calculate_dashboard_dim_parity_breakdown(self, lactated_cows):
+        """DIMカテゴリ × 産次 の分布を計算（経産牛全体）。妊娠/未受胎/繁殖中止ステータスも集計。"""
+        from datetime import datetime
+        # 繁殖検診レポートの open_days histogram と同じ区切り
+        bins   = [0, 50, 85, 115, 150, 200, 300, 99999]
+        b_labels = ["~50", "51~85", "86~115", "116~150", "151~200", "201~300", "300超"]
+        p_labels = ["1産", "2産", "3産", "4産以上"]
+        n_bins = len(b_labels)
+        n_par  = len(p_labels)
+        data = [[0] * n_par for _ in range(n_bins)]
+        # 妊娠ステータス別集計（RC: 5/6=妊娠, 1=繁殖中止, 2/3/4=未受胎）
+        status_data = [{"pregnant": 0, "open": 0, "dnb": 0} for _ in range(n_bins)]
+        today = datetime.now()
+        for cow in lactated_cows:
+            lact = cow.get("lact")
+            clvd = cow.get("clvd")
+            if lact is None or not clvd:
+                continue
+            try:
+                dim = (today - datetime.strptime(clvd, "%Y-%m-%d")).days
+                lact_int = int(lact)
+            except (ValueError, TypeError):
+                continue
+            if dim < 0 or lact_int <= 0:
+                continue
+            # DIM bin
+            b_idx = None
+            for i in range(len(bins) - 1):
+                if bins[i] <= dim < bins[i + 1]:
+                    b_idx = i; break
+            if b_idx is None:
+                continue
+            # 産次グループ
+            p_idx = 0 if lact_int == 1 else 1 if lact_int == 2 else 2 if lact_int == 3 else 3
+            data[b_idx][p_idx] += 1
+            # 妊娠ステータス
+            rc = cow.get("rc", 4)
+            if rc in [5, 6]:
+                status_data[b_idx]["pregnant"] += 1
+            elif rc == 1:
+                status_data[b_idx]["dnb"] += 1
+            else:
+                status_data[b_idx]["open"] += 1
+        row_totals = [sum(row) for row in data]
+        col_totals = [sum(data[r][c] for r in range(n_bins)) for c in range(n_par)]
+        return {
+            "data": data,
+            "bin_labels": b_labels,
+            "parity_labels": p_labels,
+            "row_totals": row_totals,
+            "col_totals": col_totals,
+            "grand_total": sum(row_totals),
+            "status_data": status_data,
+        }
+
+    def _calculate_dashboard_cumulative_pregnancy(self):
+        """累積妊娠頭数グラフ用データを計算（reproduction_checkup_reportの関数を再利用）"""
+        try:
+            from datetime import datetime
+            from modules.reproduction_checkup_report import (
+                annual_required_pregnancies,
+                get_current_parous_count,
+                get_goal_values,
+                get_monthly_pregnancy_counts,
+                _cumulative_from_monthly,
+                get_latest_pregnancy_confirmed_ai_et_date,
+            )
+            from settings_manager import SettingsManager
+
+            if not self.farm_path:
+                return None
+
+            settings_manager = SettingsManager(self.farm_path)
+            parous = get_current_parous_count(self.db, self.rule_engine)
+            interval, replacement, abortion = get_goal_values(settings_manager)
+            annual_required = annual_required_pregnancies(
+                parous, float(interval), float(replacement), float(abortion)
+            )
+
+            latest_ai_et_date = get_latest_pregnancy_confirmed_ai_et_date(self.db)
+            if latest_ai_et_date:
+                try:
+                    current_year = int(latest_ai_et_date[:4])
+                except ValueError:
+                    current_year = datetime.now().year
+            else:
+                current_year = datetime.now().year
+
+            start_cur  = f"{current_year}-01-01"
+            end_cur    = f"{current_year}-12-31"
+            start_prev = f"{current_year - 1}-01-01"
+            end_prev   = f"{current_year - 1}-12-31"
+
+            monthly_current = get_monthly_pregnancy_counts(self.db, start_cur, end_cur)
+            monthly_prev    = get_monthly_pregnancy_counts(self.db, start_prev, end_prev)
+
+            cum_cur  = _cumulative_from_monthly(monthly_current, current_year)
+            cum_prev = _cumulative_from_monthly(monthly_prev, current_year - 1)
+
+            # 確定実績頭数（直近妊娠確定AI/ET日時点）
+            current_pregnancies = None
+            latest_dt = None
+            if latest_ai_et_date:
+                try:
+                    latest_dt = datetime.strptime(latest_ai_et_date[:10], "%Y-%m-%d")
+                    cur_dates = [datetime.strptime(d, "%Y-%m-%d") for d, _ in cum_cur]
+                    cur_vals  = [v for _, v in cum_cur]
+                    solid_end = len(cur_dates)
+                    for i, d in enumerate(cur_dates):
+                        if d > latest_dt:
+                            solid_end = i
+                            break
+                    current_pregnancies = cur_vals[solid_end - 1] if solid_end > 0 else 0.0
+                except (ValueError, TypeError):
+                    pass
+
+            month_per = round(annual_required / 12, 1) if annual_required > 0 else 0.0
+
+            return {
+                "annual_required":      annual_required,
+                "month_per":            month_per,
+                "current_year":         current_year,
+                "cum_cur":              cum_cur,
+                "cum_prev":             cum_prev,
+                "latest_ai_et_date":    latest_ai_et_date,
+                "latest_dt":            latest_dt,
+                "current_pregnancies":  current_pregnancies,
+                "parous":               parous,
+                "interval":             interval,
+            }
+        except Exception as e:
+            logging.error(f"累積妊娠頭数計算エラー: {e}", exc_info=True)
+            return None
+
     def _calculate_dashboard_insemination_count_fertility_stats(self):
         """授精回数ごとの受胎率統計を計算"""
         from datetime import datetime, timedelta
@@ -552,6 +976,216 @@ class DashboardMixin:
                 "avg_pcci": None
             }
     
+    def _calculate_ai_et_conception_stats(self, lactated_cows):
+        """経産牛の授精種類コード別受胎率を計算する（自然発情・WPG・CIDRなど）。"""
+        import json as _json
+        from settings_manager import SettingsManager
+        # 授精種類コード→表示名マップを農場設定から取得
+        type_names: dict = {}
+        if self.farm_path:
+            try:
+                sm = SettingsManager(self.farm_path)
+                type_names = sm.get("insemination_type_codes", {}) or {}
+            except Exception:
+                pass
+        UNKNOWN = "不明"
+        stats: dict = {}  # type_label -> {"count":0, "pregnant":0}
+
+        for cow in lactated_cows:
+            cow_auto_id = cow.get("auto_id")
+            if not cow_auto_id:
+                continue
+            events = self.db.get_events_by_cow(cow_auto_id, include_deleted=False)
+            clvd = cow.get("clvd") or ""
+            ai_events = [
+                e for e in events
+                if e.get("event_number") in (200, 201)
+                and e.get("event_date", "") >= clvd
+            ]
+            preg_events = [
+                e for e in events
+                if e.get("event_number") in (303, 307)
+                and e.get("event_date", "") >= clvd
+            ]
+            neg_events = [
+                e for e in events
+                if e.get("event_number") in (302, 306)
+                and e.get("event_date", "") >= clvd
+            ]
+            for ai in ai_events:
+                ai_date = ai.get("event_date", "")
+                # json_dataから授精種類コードを取得
+                jd = ai.get("json_data") or {}
+                if isinstance(jd, str):
+                    try:
+                        jd = _json.loads(jd)
+                    except Exception:
+                        jd = {}
+                type_code = (
+                    jd.get("insemination_type_code")
+                    or jd.get("type")
+                    or jd.get("ai_type")
+                )
+                label = type_names.get(str(type_code), UNKNOWN) if type_code else UNKNOWN
+                if label not in stats:
+                    stats[label] = {"count": 0, "pregnant": 0}
+                stats[label]["count"] += 1
+                # 受胎判定
+                later_pos = [e for e in preg_events if e.get("event_date", "") > ai_date]
+                later_neg = [e for e in neg_events  if e.get("event_date", "") > ai_date]
+                if later_pos:
+                    first_pos = min(e.get("event_date", "") for e in later_pos)
+                    first_neg = min((e.get("event_date", "") for e in later_neg), default="9999")
+                    if first_pos <= first_neg:
+                        stats[label]["pregnant"] += 1
+
+        # 授精数の多い順にソート
+        result = []
+        for label, s in sorted(stats.items(), key=lambda kv: -kv[1]["count"]):
+            cr = round(s["pregnant"] / s["count"] * 100) if s["count"] > 0 else None
+            result.append({"name": label, "count": s["count"], "pregnant": s["pregnant"], "cr": cr})
+        return result
+
+    def _calculate_first_ai_dim_scatter(self, lactated_cows):
+        """初回授精DIM(Y) × 分娩月日(X) の散布図データを返す。"""
+        from datetime import datetime
+        points = []
+        for cow in lactated_cows:
+            cow_auto_id = cow.get("auto_id")
+            clvd = cow.get("clvd") or ""
+            cow_id = cow.get("cow_id", "")
+            if not cow_auto_id or not clvd:
+                continue
+            try:
+                clvd_dt = datetime.strptime(clvd, "%Y-%m-%d")
+            except ValueError:
+                continue
+            events = self.db.get_events_by_cow(cow_auto_id, include_deleted=False)
+            # 分娩日以降の最初のAI/ETイベント
+            ai_events = sorted(
+                [e for e in events if e.get("event_number") in (200, 201) and e.get("event_date","") >= clvd],
+                key=lambda e: e.get("event_date","")
+            )
+            if not ai_events:
+                continue
+            first_ai_date = ai_events[0].get("event_date","")
+            try:
+                first_ai_dt = datetime.strptime(first_ai_date, "%Y-%m-%d")
+            except ValueError:
+                continue
+            first_ai_dim = (first_ai_dt - clvd_dt).days
+            if first_ai_dim < 0:
+                continue
+            rc = cow.get("rc", 4)
+            lact = cow.get("lact", 1)
+            points.append({
+                "cow_id": cow_id,
+                "auto_id": cow_auto_id,
+                "x_date": clvd,
+                "x_label": f"{clvd_dt.month}/{clvd_dt.day}",
+                "y": first_ai_dim,
+                "lact": lact,
+                "rc": rc,
+            })
+        # 分娩日順にソート
+        points.sort(key=lambda p: p["x_date"])
+        return points
+
+    def _calculate_rc_dim_scatter(self, lactated_cows):
+        """RC(Y) × DIM(X) の散布図データを返す。"""
+        from datetime import datetime
+        today = datetime.now()
+        points = []
+        rc_labels = {1:"繁殖停止", 2:"Fresh", 3:"授精後", 4:"空胎", 5:"妊娠中", 6:"乾乳"}
+        for cow in lactated_cows:
+            clvd = cow.get("clvd") or ""
+            cow_id = cow.get("cow_id","")
+            auto_id = cow.get("auto_id")
+            if not clvd or not auto_id:
+                continue
+            try:
+                dim = (today - datetime.strptime(clvd, "%Y-%m-%d")).days
+            except ValueError:
+                continue
+            if dim < 0:
+                continue
+            rc = cow.get("rc", 4)
+            lact = cow.get("lact", 1)
+            points.append({
+                "cow_id": cow_id,
+                "auto_id": auto_id,
+                "x": dim,
+                "y": rc,
+                "rc_label": rc_labels.get(rc, str(rc)),
+                "lact": lact,
+            })
+        return points
+
+    def _calculate_dashboard_pr_hdr(self):
+        """21日妊娠率（PR）と授精実施率（HDR）をメイン画面と同じ18サイクル遡りで計算する。"""
+        try:
+            from datetime import datetime
+            from modules.reproduction_analysis import ReproductionAnalysis
+            today = datetime.now()
+            end_date = today.strftime("%Y-%m-%d")
+            item_dict_path = Path(self.farm_path) / "config" / "item_dictionary.json"
+            if not item_dict_path.exists():
+                item_dict_path = Path(__file__).resolve().parent.parent.parent / "config_default" / "item_dictionary.json"
+            from modules.formula_engine import FormulaEngine
+            fe = FormulaEngine(self.db, item_dict_path)
+            analyzer = ReproductionAnalysis(
+                db=self.db, rule_engine=self.rule_engine,
+                formula_engine=fe, vwp=50
+            )
+            # period_start=None → DEFAULT_CYCLES(18)サイクル遡る（メイン画面と同じロジック）
+            results = analyzer.analyze(None, end_date) or []
+            total_br_el   = sum(getattr(r, "br_el",        0) or 0 for r in results)
+            total_bred    = sum(getattr(r, "bred",          0) or 0 for r in results)
+            total_preg_el = sum(getattr(r, "preg_eligible", 0) or 0 for r in results)
+            total_preg    = sum(getattr(r, "preg",          0) or 0 for r in results)
+            avg_hdr = round(total_bred    / total_br_el   * 100, 1) if total_br_el   else None
+            avg_pr  = round(total_preg    / total_preg_el * 100, 1) if total_preg_el else None
+            actual_start = getattr(results[0], "start_date", end_date) if results else end_date
+            return {
+                "avg_pr":  avg_pr,
+                "avg_hdr": avg_hdr,
+                "start_date": actual_start,
+                "end_date":   end_date,
+            }
+        except Exception as e:
+            logging.debug(f"PR/HDR計算スキップ: {e}")
+            return {"avg_pr": None, "avg_hdr": None, "start_date": None, "end_date": None}
+
+    def _calculate_dashboard_repro_detail(self):
+        """21日サイクル別PR/HDR詳細とDIM別妊娠率をメイン画面と同じ18サイクル遡りで計算する。"""
+        try:
+            from datetime import datetime
+            from modules.reproduction_analysis import ReproductionAnalysis
+            from modules.formula_engine import FormulaEngine
+            today = datetime.now()
+            end_date = today.strftime("%Y-%m-%d")
+            item_dict_path = Path(self.farm_path) / "config" / "item_dictionary.json"
+            if not item_dict_path.exists():
+                item_dict_path = Path(__file__).resolve().parent.parent.parent / "config_default" / "item_dictionary.json"
+            fe = FormulaEngine(self.db, item_dict_path)
+            analyzer = ReproductionAnalysis(
+                db=self.db, rule_engine=self.rule_engine,
+                formula_engine=fe, vwp=50
+            )
+            # period_start=None → DEFAULT_CYCLES(18)サイクル遡る（メイン画面と同じロジック）
+            cycle_results = analyzer.analyze(None, end_date) or []
+            dim_results   = analyzer.analyze_by_dim(None, end_date, n_ranges=10) or []
+            actual_start  = getattr(cycle_results[0], "start_date", end_date) if cycle_results else end_date
+            return {
+                "cycles":     cycle_results,
+                "dim_pr":     dim_results,
+                "start_date": actual_start,
+                "end_date":   end_date,
+            }
+        except Exception as e:
+            logging.debug(f"繁殖詳細計算スキップ: {e}")
+            return None
+
     def _calculate_dashboard_scc_stats(self, lactated_cows):
         """体細胞要約を計算（リニアスコア階層、平均体細胞、平均リニアスコア）"""
         # 全イベントから乳検イベント（event_number=601）を取得
@@ -826,7 +1460,185 @@ class DashboardMixin:
             "ls_points": ls_points
         }
     
-    def _build_dashboard_html(self, farm_name, parity_segments, avg_parity, total, milk_stats, fertility_stats, monthly_fertility_stats, herd_summary, scc_summary, scatter_data, insemination_count_fertility_stats, herd_dynamics_data=None):
+    def _build_cumulative_pregnancy_section(self, data):
+        """累積妊娠頭数グラフ＋目標値のHTML（SVG折れ線グラフ）を返す。"""
+        import math as _math
+        import calendar as _calendar
+        from datetime import datetime as _dt
+
+        if not data:
+            return '<div class="section-title">累積妊娠頭数</div><div class="subnote">データがありません</div>'
+
+        annual_required     = data.get("annual_required", 0) or 0
+        current_year        = data.get("current_year", _dt.now().year)
+        cum_cur             = data.get("cum_cur") or []
+        cum_prev            = data.get("cum_prev") or []
+        latest_dt           = data.get("latest_dt")
+        current_pregnancies = data.get("current_pregnancies")
+        month_per           = data.get("month_per", 0) or 0
+        latest_ai_et_date   = data.get("latest_ai_et_date") or ""
+
+        # ---- SVGチャート ----
+        W, H          = 640, 240
+        ML, MR, MT, MB = 46, 16, 16, 32
+        PW = W - ML - MR
+        PH = H - MT - MB
+
+        # Y範囲
+        max_y_raw = max(annual_required, 10.0)
+        if cum_cur:  max_y_raw = max(max_y_raw, max(v for _, v in cum_cur))
+        if cum_prev: max_y_raw = max(max_y_raw, max(v for _, v in cum_prev))
+        max_y = (int(max_y_raw) // 10 + 1) * 10
+
+        # 月末X座標（端数）: month m の月末 = cumulative_days / total_days
+        total_days_year = 366 if _calendar.isleap(current_year) else 365
+        month_end_fracs = []
+        cum_d = 0
+        for m in range(1, 13):
+            _, days = _calendar.monthrange(current_year, m)
+            cum_d += days
+            month_end_fracs.append(cum_d / total_days_year)
+
+        def xf(frac):
+            return ML + frac * PW
+
+        def yv(val):
+            return MT + (1.0 - val / max_y) * PH if max_y > 0 else MT + PH
+
+        # latest_dt の年内fractional位置
+        latest_frac = None
+        if latest_dt and latest_dt.year == current_year:
+            jan1     = _dt(current_year, 1, 1)
+            dec31    = _dt(current_year, 12, 31)
+            tot_span = (dec31 - jan1).days
+            if tot_span > 0:
+                latest_frac = min(1.0, (latest_dt - jan1).days / tot_span)
+
+        # 実績のうち確定済み終端インデックス
+        solid_end = len(cum_cur)
+        if latest_dt and latest_dt.year == current_year and cum_cur:
+            for i, (d_str, _) in enumerate(cum_cur):
+                if _dt.strptime(d_str, "%Y-%m-%d") > latest_dt:
+                    solid_end = i
+                    break
+
+        s = []
+        s.append(f'<svg viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block" xmlns="http://www.w3.org/2000/svg">')
+
+        # グリッド & Y軸ラベル
+        y_step = 10 if max_y <= 100 else 20 if max_y <= 200 else 50
+        y_ticks = list(range(0, int(max_y) + 1, y_step))
+        for val in y_ticks:
+            y = yv(val)
+            s.append(f'<line x1="{ML}" y1="{y:.1f}" x2="{ML+PW}" y2="{y:.1f}" stroke="#e9ecef" stroke-width="1"/>')
+            s.append(f'<text x="{ML-4}" y="{y+4:.1f}" text-anchor="end" font-size="9" fill="#666">{val}</text>')
+
+        # X軸ラベル（奇数月のみ）
+        for m in range(1, 13):
+            prev_frac = month_end_fracs[m-2] if m > 1 else 0.0
+            x_mid = xf((prev_frac + month_end_fracs[m-1]) / 2)
+            if m % 2 == 1:
+                s.append(f'<text x="{x_mid:.1f}" y="{MT+PH+24}" text-anchor="middle" font-size="9" fill="#666">{m}月</text>')
+
+        # 軸線
+        s.append(f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT+PH}" stroke="#adb5bd" stroke-width="1.5"/>')
+        s.append(f'<line x1="{ML}" y1="{MT+PH:.1f}" x2="{ML+PW}" y2="{MT+PH:.1f}" stroke="#adb5bd" stroke-width="1.5"/>')
+
+        # 前年実績（緑破線）
+        if cum_prev:
+            pts = " ".join(
+                f"{xf(month_end_fracs[i]):.1f},{yv(v):.1f}"
+                for i, (_, v) in enumerate(cum_prev)
+            )
+            s.append(f'<polyline points="{xf(0):.1f},{yv(0):.1f} {pts}" fill="none" stroke="#2e7d32" stroke-width="1.5" stroke-dasharray="4 2" stroke-opacity="0.7"/>')
+
+        # 目標線（青）：latest_fracまで実線、以降破線
+        x0_t, y0_t = xf(0), yv(0)
+        x1_t, y1_t = xf(1.0), yv(annual_required)
+        if latest_frac is not None and 0 < latest_frac < 1:
+            x_lat = xf(latest_frac)
+            y_lat = yv(annual_required * latest_frac)
+            s.append(f'<line x1="{x0_t:.1f}" y1="{y0_t:.1f}" x2="{x_lat:.1f}" y2="{y_lat:.1f}" stroke="#1565C0" stroke-width="2"/>')
+            s.append(f'<line x1="{x_lat:.1f}" y1="{y_lat:.1f}" x2="{x1_t:.1f}" y2="{y1_t:.1f}" stroke="#1565C0" stroke-width="1.5" stroke-dasharray="5 3" stroke-opacity="0.5"/>')
+        else:
+            s.append(f'<line x1="{x0_t:.1f}" y1="{y0_t:.1f}" x2="{x1_t:.1f}" y2="{y1_t:.1f}" stroke="#1565C0" stroke-width="2"/>')
+
+        # 今年度実績（オレンジ）
+        if cum_cur and solid_end > 0:
+            cur_vals = [v for _, v in cum_cur]
+            pts_list = [f"{xf(0):.1f},{yv(0):.1f}"] + [
+                f"{xf(month_end_fracs[i]):.1f},{yv(cur_vals[i]):.1f}"
+                for i in range(solid_end)
+            ]
+            s.append(f'<polyline points="{" ".join(pts_list)}" fill="none" stroke="#e65100" stroke-width="2.5"/>')
+            for i in range(solid_end):
+                cx_ = xf(month_end_fracs[i])
+                cy_ = yv(cur_vals[i])
+                s.append(f'<circle cx="{cx_:.1f}" cy="{cy_:.1f}" r="3" fill="none" stroke="#c62828" stroke-width="1.8"/>')
+            # 最終点：塗りつぶし＋アノテーション
+            lx = xf(month_end_fracs[solid_end - 1])
+            ly = yv(cur_vals[solid_end - 1])
+            lv = cur_vals[solid_end - 1]
+            s.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="4.5" fill="#c62828"/>')
+            ann_x = min(lx + 7, ML + PW - 20)
+            ann_y = max(ly - 5, MT + 10)
+            s.append(f'<text x="{ann_x:.1f}" y="{ann_y:.1f}" font-size="10" font-weight="bold" fill="#c62828">{lv:.0f}</text>')
+
+        # 凡例
+        lx0 = ML + 6
+        ly0 = MT + 12
+        s.append(f'<line x1="{lx0}" y1="{ly0}" x2="{lx0+16}" y2="{ly0}" stroke="#1565C0" stroke-width="2"/>')
+        s.append(f'<text x="{lx0+20}" y="{ly0+4}" font-size="9" fill="#333">目標</text>')
+        s.append(f'<line x1="{lx0+50}" y1="{ly0}" x2="{lx0+66}" y2="{ly0}" stroke="#e65100" stroke-width="2.5"/>')
+        s.append(f'<text x="{lx0+70}" y="{ly0+4}" font-size="9" fill="#333">実績</text>')
+        s.append(f'<line x1="{lx0+100}" y1="{ly0}" x2="{lx0+116}" y2="{ly0}" stroke="#2e7d32" stroke-width="1.5" stroke-dasharray="4 2" stroke-opacity="0.7"/>')
+        s.append(f'<text x="{lx0+120}" y="{ly0+4}" font-size="9" fill="#333">前年</text>')
+
+        s.append('</svg>')
+        chart_svg = '\n'.join(s)
+
+        # ---- 目標値ボックス ----
+        date_note = f"（{latest_ai_et_date[:10].replace('-','/')} 時点）" if latest_ai_et_date else ""
+        pct_html = ""
+        if current_pregnancies is not None and annual_required > 0:
+            pct = round(current_pregnancies / annual_required * 100)
+            color = "#2e7d32" if pct >= 80 else ("#e65100" if pct >= 50 else "#c62828")
+            pct_html = (
+                f'<div style="margin-top:10px;text-align:center">'
+                f'<span style="font-size:22px;font-weight:bold;color:{color}">{pct}%</span>'
+                f'<span style="font-size:10px;color:#666;margin-left:4px">達成</span>'
+                f'</div>'
+            )
+
+        stats_rows = [
+            ("年間目標",   f"{annual_required:.0f} 頭"),
+            ("月あたり目標", f"{month_per} 頭"),
+        ]
+        if current_pregnancies is not None:
+            stats_rows.append(("現在の実績", f'<span style="color:#c62828;font-weight:bold">{current_pregnancies:.0f} 頭</span>'))
+
+        rows_html = "\n".join(
+            f'<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #f0f0f0">'
+            f'<span style="color:#555;font-size:11px">{k}</span>'
+            f'<span style="font-weight:bold;font-size:12px">{v}</span></div>'
+            for k, v in stats_rows
+        )
+        if date_note:
+            rows_html += f'<div style="font-size:9px;color:#888;text-align:right;margin-top:2px">{date_note}</div>'
+
+        return f"""
+<div class="section-title">累積妊娠頭数（{current_year}年）</div>
+<div style="display:grid;grid-template-columns:150px 1fr;gap:16px;align-items:start">
+  <div style="padding-top:4px">
+    {rows_html}
+    {pct_html}
+  </div>
+  <div>
+    {chart_svg}
+  </div>
+</div>"""
+
+    def _build_dashboard_html(self, farm_name, parity_segments, avg_parity, total, milk_stats, fertility_stats, monthly_fertility_stats, herd_summary, scc_summary, scatter_data, insemination_count_fertility_stats, herd_dynamics_data=None, pr_hdr_data=None, repro_detail=None, heifer_monthly_fertility_stats=None, cumulative_pregnancy_data=None, dim_parity_breakdown=None, ai_et_conception_stats=None, first_ai_scatter=None, rc_dim_scatter=None):
         """ダッシュボードのHTMLを生成"""
         # 乳量・リニアスコア散布図（乳検レポートと同じ仕様：Plotly、ホバーでID表示・2グラフ連動、x_min/x_max で DIM 軸を固定）
         scatter_plotly_html = ""
@@ -883,15 +1695,144 @@ class DashboardMixin:
                     title = "乳量" if "milk" in tid else "リニアスコア"
                     parts.append(
                         f'<div class="scatter-card">'
-                        f'<div class="chart-title">{html.escape(title)}</div>'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+                        f'<div class="chart-title" style="margin:0">{html.escape(title)}</div>'
+                        f'<button id="{html.escape(tid)}_xhbtn" style="font-size:10px;padding:3px 10px;'
+                        f'border:1px solid #e53935;border-radius:4px;background:#fff;color:#e53935;'
+                        f'cursor:pointer;white-space:nowrap">＋ 基準線</button>'
+                        f'</div>'
                         f'<div class="scatter-chart"><div id="{html.escape(tid)}" class="plotly-scatter-div" style="min-height:260px;"></div></div>'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center">'
                         f'<div class="scatter-legend">'
                         f'<span class="legend-item"><span class="legend-dot" style="background-color:#E91E63;"></span>1産</span>'
                         f'<span class="legend-item"><span class="legend-dot" style="background-color:#00ACC1;"></span>2産</span>'
                         f'<span class="legend-item"><span class="legend-dot" style="background-color:#26A69A;"></span>3産以上</span>'
-                        f'</div></div>'
+                        f'</div>'
+                        f'<div id="{html.escape(tid)}_xhlabel" style="font-size:9px;color:#e53935;display:none"></div>'
+                        f'</div>'
+                        f'</div>'
                     )
-                scatter_plotly_html = '<div class="scatter-stack">' + "".join(parts) + '</div>\n' + script
+                # 基準線（十字）JS: Plotly shapes API を利用
+                crosshair_js = """
+<script>
+(function(){
+  var plotIds = ['scatter-dash-milk','scatter-dash-ls'];
+  var xhMode = {};
+  var fixed = {};  // plotId -> {x, y} or null
+
+  plotIds.forEach(function(pid){
+    xhMode[pid] = false;
+    fixed[pid] = null;
+  });
+
+  // マウス座標 → データ座標変換（Plotlyの内部レイアウトを使用）
+  function toDataCoords(pid, clientX, clientY){
+    var gd = document.getElementById(pid);
+    if(!gd || !gd._fullLayout) return null;
+    var layout = gd._fullLayout;
+    var plotEl = gd.querySelector('.nsewdrag');
+    if(!plotEl) return null;
+    var pb = plotEl.getBoundingClientRect();
+    var mx = clientX - pb.left;
+    var my = clientY - pb.top;
+    if(mx < 0 || mx > pb.width || my < 0 || my > pb.height) return null;
+    var xr = layout.xaxis.range;
+    var yr = layout.yaxis.range;
+    return {
+      x: xr[0] + (mx / pb.width)  * (xr[1] - xr[0]),
+      y: yr[0] + (1 - my / pb.height) * (yr[1] - yr[0])
+    };
+  }
+
+  function applyShapes(pid, curCoords){
+    var shapes = [];
+    var annots = [];
+    var f = fixed[pid];
+    // 固定線（実線・濃いめ）
+    if(f){
+      shapes.push({type:'line',x0:f.x,x1:f.x,y0:0,y1:1,yref:'paper',
+        line:{color:'#e53935',width:1.5,dash:'dot'}});
+      shapes.push({type:'line',x0:0,x1:1,xref:'paper',y0:f.y,y1:f.y,
+        line:{color:'#e53935',width:1.5,dash:'dot'}});
+      annots.push({x:f.x,y:1,yref:'paper',
+        text:f.x.toFixed(1),showarrow:false,
+        font:{size:9,color:'#e53935'},xanchor:'left',yanchor:'top'});
+      annots.push({x:1,xref:'paper',y:f.y,
+        text:f.y.toFixed(2),showarrow:false,
+        font:{size:9,color:'#e53935'},xanchor:'right'});
+    }
+    // カーソル追従線（薄め・破線）
+    if(curCoords){
+      shapes.push({type:'line',x0:curCoords.x,x1:curCoords.x,y0:0,y1:1,yref:'paper',
+        opacity:0.5,line:{color:'#e53935',width:1,dash:'dash'}});
+      shapes.push({type:'line',x0:0,x1:1,xref:'paper',y0:curCoords.y,y1:curCoords.y,
+        opacity:0.5,line:{color:'#e53935',width:1,dash:'dash'}});
+    }
+    Plotly.relayout(pid, {shapes: shapes, annotations: annots});
+  }
+
+  function initChart(pid){
+    var el = document.getElementById(pid);
+    if(!el || !el.on) return;
+    var btn = document.getElementById(pid+'_xhbtn');
+    var lbl = document.getElementById(pid+'_xhlabel');
+
+    // ボタン：モード切替
+    if(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        xhMode[pid] = !xhMode[pid];
+        btn.style.background = xhMode[pid] ? '#e53935' : '#fff';
+        btn.style.color      = xhMode[pid] ? '#fff'    : '#e53935';
+        el.style.cursor      = xhMode[pid] ? 'crosshair': '';
+        if(!xhMode[pid]){
+          applyShapes(pid, null);
+          if(lbl) lbl.style.display = 'none';
+        }
+      });
+    }
+
+    // mousemove：カーソル位置に十字線を追従
+    el.addEventListener('mousemove', function(e){
+      if(!xhMode[pid]) return;
+      var coords = toDataCoords(pid, e.clientX, e.clientY);
+      if(!coords) return;
+      applyShapes(pid, coords);
+      if(lbl){
+        lbl.style.display = '';
+        lbl.textContent = 'X: ' + coords.x.toFixed(1) + '  Y: ' + coords.y.toFixed(2);
+      }
+    });
+
+    // mouseleave：カーソル線を消す（固定線は維持）
+    el.addEventListener('mouseleave', function(){
+      if(!xhMode[pid]) return;
+      applyShapes(pid, null);
+      if(lbl) lbl.style.display = 'none';
+    });
+
+    // click：現在位置に十字線を固定
+    el.addEventListener('click', function(e){
+      if(!xhMode[pid]) return;
+      var coords = toDataCoords(pid, e.clientX, e.clientY);
+      if(!coords) return;
+      fixed[pid] = coords;
+      applyShapes(pid, null);
+    });
+
+    // ダブルクリック：固定線をリセット
+    el.on('plotly_doubleclick', function(){
+      fixed[pid] = null;
+      applyShapes(pid, null);
+    });
+  }
+
+  function tryInit(){ plotIds.forEach(function(pid){ initChart(pid); }); }
+  if(document.readyState === 'complete'){ setTimeout(tryInit, 600); }
+  else{ window.addEventListener('load', function(){ setTimeout(tryInit, 400); }); }
+})();
+</script>"""
+                scatter_plotly_html = '<div class="scatter-stack">' + "".join(parts) + '</div>\n' + script + crosshair_js
         if not scatter_plotly_html and (scatter_data.get("milk_points") or scatter_data.get("ls_points")):
             milk_pts = scatter_data.get("milk_points", [])
             ls_pts = scatter_data.get("ls_points", [])
@@ -1352,9 +2293,576 @@ class DashboardMixin:
         else:
             scc_summary_html = '<div class="scc-section"><div class="section-title">体細胞要約</div><div class="milk-stats"><div class="stats-label">乳検データがありません。</div></div></div>'
         
+        # （PR/HDRは妊娠率カードで表示するため牛群要約からは除外）
+
+        # 未経産牛 月別受胎率テーブル
+        heifer_monthly_table_html = ""
+        if heifer_monthly_fertility_stats and heifer_monthly_fertility_stats.get("stats"):
+            h_stats = heifer_monthly_fertility_stats["stats"]
+            h_start = heifer_monthly_fertility_stats["start_date"]
+            h_end   = heifer_monthly_fertility_stats["end_date"]
+            from datetime import datetime as _dt
+            _s = _dt.strptime(h_start, '%Y-%m-%d')
+            _e = _dt.strptime(h_end,   '%Y-%m-%d')
+            _months = []
+            _cur = _dt(_s.year, _s.month, 1)
+            _end_m = _dt(_e.year, _e.month, 1)
+            while _cur <= _end_m:
+                _months.append(_cur.strftime('%Y-%m'))
+                _cur = _dt(_cur.year + (_cur.month == 12), (_cur.month % 12) + 1, 1)
+            h_rows = ""
+            for ym in _months:
+                st = h_stats.get(ym, {})
+                conceived = st.get('conceived', 0)
+                not_conceived = st.get('not_conceived', 0)
+                other = st.get('other', 0)
+                total_c = st.get('total', 0)
+                denom = conceived + not_conceived
+                rate_str = f"{conceived/denom*100:.1f}%" if denom > 0 else "0.0%"
+                h_rows += (
+                    f'<tr><td class="num">{html.escape(ym)}</td>'
+                    f'<td class="num">{html.escape(rate_str)}</td>'
+                    f'<td class="num">{html.escape(str(conceived))}</td>'
+                    f'<td class="num">{html.escape(str(not_conceived))}</td>'
+                    f'<td class="num">{html.escape(str(other))}</td>'
+                    f'<td class="num">{html.escape(str(total_c))}</td></tr>\n'
+                )
+            heifer_monthly_table_html = f"""
+            <div class="fertility-section">
+                <div class="section-title">未経産牛 月ごと受胎率</div>
+                <div class="subheader">{h_start} ～ {h_end}</div>
+                <table class="summary-table" style="width:100%;max-width:600px">
+                    <thead><tr>
+                        <th>授精月</th><th>受胎率</th><th>受胎</th><th>不受胎</th><th>その他</th><th>総数</th>
+                    </tr></thead>
+                    <tbody>{h_rows}</tbody>
+                </table>
+            </div>"""
+        else:
+            heifer_monthly_table_html = '<div class="fertility-section"><div class="subnote">未経産牛受胎率データがありません。</div></div>'
+
+        # 経産牛 妊娠状況 ドーナツグラフ + DIM×産次内訳テーブル
+        import math as _math
+        pregnancy_donut_html = ""
+        _h_pregnant = herd_summary.get("pregnant_count", 0) if herd_summary else 0
+        _h_total    = herd_summary.get("total_count", 0) if herd_summary else 0
+        if _h_total > 0:
+            _h_open  = _h_total - _h_pregnant
+            _h_pct   = _h_pregnant / _h_total * 100
+            _cx, _cy, _r, _sw = 80, 80, 52, 24
+            _circ    = 2 * _math.pi * _r
+            _preg_d  = _h_pregnant / _h_total * _circ
+            # viewBox十分広く（凡例が切れないよう 280px）
+            _donut_svg = (
+                f'<svg viewBox="0 0 280 160" style="width:100%;max-width:280px;height:auto;display:block;margin:0 auto" xmlns="http://www.w3.org/2000/svg">'
+                f'<circle cx="{_cx}" cy="{_cy}" r="{_r}" fill="none" stroke="#dee2e6" stroke-width="{_sw}"/>'
+                f'<circle cx="{_cx}" cy="{_cy}" r="{_r}" fill="none" stroke="#1565C0" stroke-width="{_sw}" '
+                f'stroke-dasharray="{_preg_d:.2f} {_circ:.2f}" transform="rotate(-90 {_cx} {_cy})"/>'
+                f'<text x="{_cx}" y="{_cy - 8}" text-anchor="middle" font-size="18" font-weight="bold" fill="#1565C0">{_h_pct:.0f}%</text>'
+                f'<text x="{_cx}" y="{_cy + 11}" text-anchor="middle" font-size="9" fill="#555">妊娠中</text>'
+                f'<rect x="152" y="42" width="11" height="11" fill="#1565C0" rx="2"/>'
+                f'<text x="167" y="52" font-size="10" fill="#333">妊娠・乾乳 {_h_pregnant}頭</text>'
+                f'<rect x="152" y="60" width="11" height="11" fill="#dee2e6" rx="2"/>'
+                f'<text x="167" y="70" font-size="10" fill="#333">未妊娠 {_h_open}頭</text>'
+                f'<text x="167" y="86" font-size="10" fill="#888">計 {_h_total}頭</text>'
+                f'</svg>'
+            )
+            # DIM別 妊娠ステータス バーチャート + 産次テーブル
+            _dpb = dim_parity_breakdown
+            if _dpb and _dpb.get("grand_total", 0) > 0:
+                _bl  = _dpb["bin_labels"]
+                _pl  = _dpb["parity_labels"]
+                _dt  = _dpb["data"]
+                _rt  = _dpb["row_totals"]
+                _ct  = _dpb["col_totals"]
+                _gt  = _dpb["grand_total"]
+                _sd  = _dpb.get("status_data", [{"pregnant":0,"open":0,"dnb":0}]*len(_bl))
+                _max_total = max(_rt) if _rt else 1
+
+                # ── 横積み上げバーチャート ──
+                _bar_rows = ""
+                for i, blabel in enumerate(_bl):
+                    if _rt[i] == 0:
+                        continue
+                    pg = _sd[i]["pregnant"]
+                    op = _sd[i]["open"]
+                    dn = _sd[i]["dnb"]
+                    tot = _rt[i]
+                    # 幅をmax_totalで正規化（最長バーが100%）
+                    _scale = 100 / _max_total
+                    pg_w = pg * _scale
+                    op_w = op * _scale
+                    dn_w = dn * _scale
+                    # 各セグメント内にラベル（2頭以上のみ表示）
+                    def _seg(w, color, count, label_color="#fff"):
+                        if w < 0.1:
+                            return ""
+                        txt = str(count) if count >= 2 else ""
+                        return (
+                            f'<div style="width:{w:.1f}%;background:{color};display:flex;'
+                            f'align-items:center;justify-content:center;'
+                            f'font-size:9px;font-weight:600;color:{label_color};'
+                            f'overflow:hidden;white-space:nowrap;min-width:0">{txt}</div>'
+                        )
+                    _bar_rows += (
+                        f'<div style="display:flex;align-items:center;margin-bottom:3px">'
+                        f'<div style="width:58px;font-size:9px;color:#546e7a;text-align:right;'
+                        f'padding-right:7px;white-space:nowrap;flex-shrink:0">{blabel}日</div>'
+                        f'<div style="flex:1;height:16px;display:flex;border-radius:3px;overflow:hidden;background:#f0f0f0">'
+                        f'{_seg(pg_w,"#1565C0",pg)}'
+                        f'{_seg(op_w,"#EF6C00",op)}'
+                        f'{_seg(dn_w,"#9E9E9E",dn,"#fff")}'
+                        f'</div>'
+                        f'<div style="width:28px;font-size:9px;color:#333;text-align:right;'
+                        f'padding-left:5px;flex-shrink:0;font-weight:600">{tot}</div>'
+                        f'</div>'
+                    )
+
+                # 凡例
+                _legend = (
+                    f'<div style="display:flex;gap:12px;margin-bottom:6px;flex-wrap:wrap">'
+                    f'<span style="display:flex;align-items:center;gap:4px;font-size:9px;color:#555">'
+                    f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#1565C0"></span>妊娠</span>'
+                    f'<span style="display:flex;align-items:center;gap:4px;font-size:9px;color:#555">'
+                    f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#EF6C00"></span>未受胎</span>'
+                    f'<span style="display:flex;align-items:center;gap:4px;font-size:9px;color:#555">'
+                    f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9E9E9E"></span>繁殖中止</span>'
+                    f'</div>'
+                )
+
+                # ── 産次別テーブル（コンパクト） ──
+                _th = "".join(
+                    f'<th style="padding:2px 5px;font-size:9px;text-align:center;background:#f8f9fa;border:1px solid #dee2e6">{p}</th>'
+                    for p in _pl
+                )
+                _tbody = ""
+                for i, blabel in enumerate(_bl):
+                    if _rt[i] == 0:
+                        continue
+                    _cells = "".join(
+                        f'<td style="padding:2px 4px;font-size:9px;text-align:center;border:1px solid #e9ecef">{_dt[i][j] if _dt[i][j] else ""}</td>'
+                        for j in range(len(_pl))
+                    )
+                    _tbody += (
+                        f'<tr>'
+                        f'<td style="padding:2px 4px;font-size:9px;white-space:nowrap;border:1px solid #e9ecef;background:#f8f9fa;color:#546e7a">{blabel}日</td>'
+                        f'{_cells}'
+                        f'<td style="padding:2px 4px;font-size:9px;text-align:center;font-weight:bold;border:1px solid #e9ecef">{_rt[i]}</td>'
+                        f'</tr>'
+                    )
+                _foot_cells = "".join(
+                    f'<td style="padding:2px 4px;font-size:9px;text-align:center;font-weight:bold;border:1px solid #dee2e6">{_ct[j] if _ct[j] else ""}</td>'
+                    for j in range(len(_pl))
+                )
+
+                _dim_table_html = (
+                    f'<div style="margin-top:12px">'
+                    # バーチャートセクション
+                    f'<div style="font-size:10px;color:#546e7a;font-weight:600;margin-bottom:6px">DIM別 妊娠ステータス</div>'
+                    f'{_legend}'
+                    f'{_bar_rows}'
+                    # 産次テーブル
+                    f'<div style="font-size:9px;color:#90a4ae;margin:10px 0 4px">DIM別・産次別内訳（頭）</div>'
+                    f'<table style="border-collapse:collapse;width:100%">'
+                    f'<thead><tr>'
+                    f'<th style="padding:2px 4px;font-size:9px;background:#f8f9fa;border:1px solid #dee2e6">DIM</th>'
+                    f'{_th}'
+                    f'<th style="padding:2px 4px;font-size:9px;background:#f8f9fa;border:1px solid #dee2e6;text-align:center">計</th>'
+                    f'</tr></thead>'
+                    f'<tbody>{_tbody}</tbody>'
+                    f'<tfoot><tr>'
+                    f'<td style="padding:2px 4px;font-size:9px;font-weight:bold;background:#f8f9fa;border:1px solid #dee2e6">計</td>'
+                    f'{_foot_cells}'
+                    f'<td style="padding:2px 4px;font-size:9px;font-weight:bold;text-align:center;border:1px solid #dee2e6">{_gt}</td>'
+                    f'</tr></tfoot>'
+                    f'</table>'
+                    f'</div>'
+                )
+            else:
+                _dim_table_html = ""
+
+            pregnancy_donut_html = (
+                f'<div style="margin-top:10px;border-top:1px solid #e9ecef;padding-top:10px">'
+                f'<div class="section-title" style="font-size:12px;margin-bottom:6px">経産牛 妊娠状況</div>'
+                f'{_donut_svg}'
+                f'{_dim_table_html}'
+                f'</div>'
+            )
+
+        # 累積妊娠頭数グラフ（SVG版）
+        cumulative_preg_section_html = self._build_cumulative_pregnancy_section(cumulative_pregnancy_data)
+
+        # 授精種類別受胎率テーブル
+        ai_et_table_html = ""
+        if ai_et_conception_stats:
+            rows = ""
+            for r in ai_et_conception_stats:
+                cr_str = f'{r["cr"]}%' if r["cr"] is not None else "—"
+                cr_color = "#1565C0" if (r["cr"] or 0) >= 50 else ("#EF6C00" if (r["cr"] or 0) >= 30 else "#c62828")
+                cr_style = f'color:{cr_color};font-weight:bold' if r["cr"] is not None else 'color:#999'
+                rows += (
+                    f'<tr>'
+                    f'<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #f0f0f0">{r["name"]}</td>'
+                    f'<td style="padding:5px 8px;font-size:11px;text-align:center;border-bottom:1px solid #f0f0f0">{r["count"]}</td>'
+                    f'<td style="padding:5px 8px;font-size:11px;text-align:center;border-bottom:1px solid #f0f0f0">{r["pregnant"]}</td>'
+                    f'<td style="padding:5px 8px;font-size:11px;text-align:center;border-bottom:1px solid #f0f0f0;{cr_style}">{cr_str}</td>'
+                    f'</tr>'
+                )
+            ai_et_table_html = (
+                f'<div class="section-title">授精種類別受胎率（経産牛）</div>'
+                f'<table style="border-collapse:collapse;width:100%;margin-top:8px">'
+                f'<thead><tr>'
+                f'<th style="padding:5px 8px;font-size:11px;background:#f8f9fa;border-bottom:2px solid #dee2e6;text-align:left">授精種類</th>'
+                f'<th style="padding:5px 8px;font-size:11px;background:#f8f9fa;border-bottom:2px solid #dee2e6;text-align:center">授精数</th>'
+                f'<th style="padding:5px 8px;font-size:11px;background:#f8f9fa;border-bottom:2px solid #dee2e6;text-align:center">受胎数</th>'
+                f'<th style="padding:5px 8px;font-size:11px;background:#f8f9fa;border-bottom:2px solid #dee2e6;text-align:center">受胎率</th>'
+                f'</tr></thead>'
+                f'<tbody>{rows}</tbody>'
+                f'</table>'
+            )
+
+        # 産次別カラーヘルパー
+        _parity_color = lambda p: "#E91E63" if p.get("lact") == 1 else "#00ACC1" if p.get("lact") == 2 else "#26A69A"
+        _parity_legend = '<span style="color:#E91E63;font-size:9px">● 1産</span> <span style="color:#00ACC1;font-size:9px">● 2産</span> <span style="color:#26A69A;font-size:9px">● 3産以上</span>'
+
+        # 初回授精DIM × 分娩月日 散布図
+        first_ai_scatter_html = _build_inline_scatter(
+            points=first_ai_scatter or [],
+            chart_id="scatter_first_ai",
+            title="初回授精日数 × 分娩月日",
+            x_label="分娩月日",
+            y_label="初回授精DIM（日）",
+            x_key="x_label",
+            y_key="y",
+            color_fn=_parity_color,
+            legend_html=_parity_legend,
+            hline_default=None,
+        )
+
+        # 繁殖状態 × DIM 散布図
+        rc_labels_map = {1:"繁殖停止", 2:"Fresh", 3:"授精後", 4:"空胎", 5:"妊娠中", 6:"乾乳"}
+        rc_dim_scatter_html = _build_inline_scatter(
+            points=rc_dim_scatter or [],
+            chart_id="scatter_rc_dim",
+            title="繁殖状態 × DIM",
+            x_label="DIM（日）",
+            y_label="繁殖状態",
+            x_key="x",
+            y_key="y",
+            color_fn=_parity_color,
+            legend_html=_parity_legend,
+            y_tick_labels=rc_labels_map,
+        )
+
         # 分娩予定月別・産子種類内訳グラフ（牛群動態）
         herd_dynamics_chart_html = self._build_herd_dynamics_chart_section(herd_dynamics_data)
         
+        # 妊娠率サイクル表 HTML
+        pr_cycle_table_html = ""
+        pr_dim_chart_html = ""
+        if repro_detail:
+            cycles = repro_detail.get("cycles") or []
+            dim_results = repro_detail.get("dim_pr") or []
+            pd_start = repro_detail.get("start_date", "")
+            pd_end = repro_detail.get("end_date", "")
+
+            # --- サイクル表 ---
+            rows_html = ""
+            total_br_el = total_bred = total_preg_el = total_preg = total_loss = 0
+            for r in cycles:
+                sd = getattr(r, "start_date", "") or ""
+                ed = getattr(r, "end_date", "") or ""
+                def _short(d):
+                    try:
+                        parts = d.split("-")
+                        return f"{int(parts[1])}/{int(parts[2])}"
+                    except Exception:
+                        return d
+                br_el = getattr(r, "br_el", 0) or 0
+                bred  = getattr(r, "bred", 0) or 0
+                hdr_v = getattr(r, "hdr", None)
+                preg_el = getattr(r, "preg_eligible", 0) or 0
+                preg  = getattr(r, "preg", 0) or 0
+                pr_v  = getattr(r, "pr", None)
+                loss  = getattr(r, "loss", 0) or 0
+                total_br_el += br_el; total_bred += bred
+                total_preg_el += preg_el; total_preg += preg; total_loss += loss
+                hdr_str = f"{int(hdr_v)}%" if hdr_v is not None else "-"
+                pr_str  = f"{int(pr_v)}%"  if pr_v  is not None else "-"
+                row_style = ' style="color:#aaa"' if preg_el == 0 else ""
+                rows_html += (
+                    f'<tr{row_style}>'
+                    f'<td class="num">{html.escape(_short(sd))}</td>'
+                    f'<td class="num">{html.escape(_short(ed))}</td>'
+                    f'<td class="num">{br_el}</td>'
+                    f'<td class="num">{bred}</td>'
+                    f'<td class="num">{hdr_str}</td>'
+                    f'<td class="num">{preg_el if preg_el else "-"}</td>'
+                    f'<td class="num">{preg if preg_el else "-"}</td>'
+                    f'<td class="num">{pr_str if preg_el else "-"}</td>'
+                    f'<td class="num">{loss}</td>'
+                    f'</tr>\n'
+                )
+            total_hdr_str = f"{round(total_bred/total_br_el*100)}%" if total_br_el else "-"
+            total_pr_str  = f"{round(total_preg/total_preg_el*100)}%" if total_preg_el else "-"
+            rows_html += (
+                f'<tr class="total-row">'
+                f'<td class="num" colspan="2"><strong>【合計】</strong></td>'
+                f'<td class="num"><strong>{total_br_el}</strong></td>'
+                f'<td class="num"><strong>{total_bred}</strong></td>'
+                f'<td class="num"><strong>{total_hdr_str}</strong></td>'
+                f'<td class="num"><strong>{total_preg_el}</strong></td>'
+                f'<td class="num"><strong>{total_preg}</strong></td>'
+                f'<td class="num"><strong>{total_pr_str}</strong></td>'
+                f'<td class="num"><strong>{total_loss}</strong></td>'
+                f'</tr>\n'
+            )
+            pr_cycle_table_html = f"""
+<div class="section-title">妊娠率（21日サイクル）</div>
+<div class="subheader">{html.escape(pd_start)} ～ {html.escape(pd_end)}　VWP=50日</div>
+<table class="summary-table" style="width:100%;font-size:11px">
+  <thead>
+    <tr>
+      <th>開始日</th><th>終了日</th><th>繁殖対象</th><th>授精</th><th>授精率%</th>
+      <th>妊娠対象</th><th>妊娠</th><th>妊娠率%</th><th>損耗</th>
+    </tr>
+  </thead>
+  <tbody>{rows_html}</tbody>
+</table>"""
+
+            # --- DIM別妊娠率複合チャート（積み上げ棒グラフ＋空胎残存率） ---
+            if dim_results:
+                import math as _math
+
+                # SVG寸法
+                CW, CH = 520, 300
+                CPL, CPR, CPT, CPB = 44, 44, 28, 36
+                CIW = CW - CPL - CPR
+                CIH = CH - CPT - CPB
+
+                # DIM範囲のX座標マッピング
+                all_starts = [getattr(r, "dim_start", 0) for r in dim_results]
+                all_ends   = [getattr(r, "dim_end",   9999) for r in dim_results]
+                eff_ends = [ds + 30 if de >= 9999 else de for ds, de in zip(all_starts, all_ends)]
+                x_dim_min = all_starts[0] if all_starts else 50
+                x_dim_max = max(eff_ends) + 20 if eff_ends else 300
+                x_dim_range = max(x_dim_max - x_dim_min, 1)
+
+                def _cx(d): return CPL + (d - x_dim_min) / x_dim_range * CIW
+                def _cy(p): return CPT + CIH * (1.0 - p / 100.0)
+
+                # グリッドと両Y軸ラベル
+                grid_svg = ""
+                for pct in range(0, 101, 10):
+                    yp = _cy(pct)
+                    grid_svg += f'<line x1="{CPL:.1f}" y1="{yp:.1f}" x2="{CW-CPR:.1f}" y2="{yp:.1f}" stroke="#e0e0e0" stroke-width="0.5"/>\n'
+                    grid_svg += f'<text x="{CPL-4}" y="{yp+3:.1f}" text-anchor="end" font-size="9" fill="#555">{pct}</text>\n'
+                    grid_svg += f'<text x="{CW-CPR+4}" y="{yp+3:.1f}" text-anchor="start" font-size="9" fill="#e65100">{pct}</text>\n'
+                # 軸線
+                grid_svg += (
+                    f'<line x1="{CPL}" y1="{CPT}" x2="{CPL}" y2="{CPT+CIH}" stroke="#aaa" stroke-width="1"/>\n'
+                    f'<line x1="{CW-CPR}" y1="{CPT}" x2="{CW-CPR}" y2="{CPT+CIH}" stroke="#e65100" stroke-width="1"/>\n'
+                    f'<line x1="{CPL}" y1="{CPT+CIH}" x2="{CW-CPR}" y2="{CPT+CIH}" stroke="#aaa" stroke-width="1"/>\n'
+                )
+
+                # 積み上げ棒グラフとエラーバー
+                bars_svg = ""
+                x_label_svg = ""
+                surv_pts = [(x_dim_min, 100.0)]
+                s_open = 100.0
+                for r in dim_results:
+                    ds   = getattr(r, "dim_start",     0)
+                    de   = getattr(r, "dim_end",     9999)
+                    de_e = ds + 30 if de >= 9999 else de
+                    hdr_val  = getattr(r, "hdr",          0) or 0
+                    pr_val   = getattr(r, "pr",           0) or 0
+                    preg_el  = getattr(r, "preg_eligible",0) or 0
+                    bw = (de_e - ds) * CIW / x_dim_range * 0.72
+                    bx = _cx((ds + de_e) / 2) - bw / 2
+
+                    # 薄青バー（HDR-PR の差分部分）
+                    diff = max(hdr_val - pr_val, 0)
+                    if diff > 0:
+                        dh = diff / 100 * CIH
+                        dy = _cy(hdr_val)
+                        bars_svg += f'<rect x="{bx:.1f}" y="{dy:.1f}" width="{bw:.1f}" height="{dh:.1f}" fill="#90caf9"/>\n'
+                    # 濃青バー（妊娠率）
+                    if pr_val > 0:
+                        ph = pr_val / 100 * CIH
+                        py = _cy(pr_val)
+                        bars_svg += f'<rect x="{bx:.1f}" y="{py:.1f}" width="{bw:.1f}" height="{ph:.1f}" fill="#1565c0"/>\n'
+                    # 95%信頼区間エラーバー
+                    if preg_el > 0 and pr_val > 0:
+                        p_frac = pr_val / 100.0
+                        ci = 1.96 * _math.sqrt(p_frac * (1 - p_frac) / preg_el) * 100
+                        ci_top = min(100.0, pr_val + ci)
+                        ci_bot = max(0.0,   pr_val - ci)
+                        ex = bx + bw / 2
+                        bars_svg += (
+                            f'<line x1="{ex:.1f}" y1="{_cy(ci_top):.1f}" x2="{ex:.1f}" y2="{_cy(ci_bot):.1f}" stroke="#1565c0" stroke-width="1.5"/>\n'
+                            f'<line x1="{ex-3:.1f}" y1="{_cy(ci_top):.1f}" x2="{ex+3:.1f}" y2="{_cy(ci_top):.1f}" stroke="#1565c0" stroke-width="1.5"/>\n'
+                            f'<line x1="{ex-3:.1f}" y1="{_cy(ci_bot):.1f}" x2="{ex+3:.1f}" y2="{_cy(ci_bot):.1f}" stroke="#1565c0" stroke-width="1.5"/>\n'
+                        )
+                    # X軸ラベル（dim_start）
+                    lx = _cx(ds)
+                    x_label_svg += f'<text x="{lx:.1f}" y="{CPT+CIH+14}" text-anchor="middle" font-size="9" fill="#666">{ds}</text>\n'
+
+                    # 空胎残存率の次のポイント
+                    s_open *= (1 - pr_val / 100.0)
+                    surv_pts.append((de_e, round(s_open, 1)))
+
+                # 空胎残存率ライン
+                surv_svg = ""
+                surv_path = " ".join(
+                    f"{'M' if i == 0 else 'L'}{_cx(p[0]):.1f},{_cy(p[1]):.1f}"
+                    for i, p in enumerate(surv_pts)
+                )
+                surv_svg += f'<path d="{surv_path}" fill="none" stroke="#e65100" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>\n'
+                surv_svg += "".join(
+                    f'<circle cx="{_cx(p[0]):.1f}" cy="{_cy(p[1]):.1f}" r="3" fill="#e65100" stroke="#fff" stroke-width="1.2"/>\n'
+                    for p in surv_pts
+                )
+
+                # 凡例
+                legend_y = CPT - 10
+                legend_svg = (
+                    f'<rect x="{CPL}" y="{legend_y-8}" width="12" height="10" fill="#90caf9" stroke="#aaa" stroke-width="0.5"/>'
+                    f'<text x="{CPL+15}" y="{legend_y}" font-size="9" fill="#333">授精率（差分）</text>'
+                    f'<rect x="{CPL+95}" y="{legend_y-8}" width="12" height="10" fill="#1565c0"/>'
+                    f'<text x="{CPL+110}" y="{legend_y}" font-size="9" fill="#333">妊娠率</text>'
+                    f'<line x1="{CPL+160}" y1="{legend_y-4}" x2="{CPL+175}" y2="{legend_y-4}" stroke="#e65100" stroke-width="2.2"/>'
+                    f'<circle cx="{CPL+168}" cy="{legend_y-4}" r="3" fill="#e65100"/>'
+                    f'<text x="{CPL+178}" y="{legend_y}" font-size="9" fill="#333">空胎残存率</text>'
+                )
+
+                # Y軸タイトル・X軸タイトル
+                axis_titles = (
+                    f'<text x="10" y="{CPT + CIH//2}" text-anchor="middle" font-size="9" fill="#555" '
+                    f'transform="rotate(-90,10,{CPT + CIH//2})">割合 (%)</text>\n'
+                    f'<text x="{CW-8}" y="{CPT + CIH//2}" text-anchor="middle" font-size="9" fill="#e65100" '
+                    f'transform="rotate(-90,{CW-8},{CPT + CIH//2})">空胎残存率 (%)</text>\n'
+                    f'<text x="{CW//2}" y="{CH-2}" text-anchor="middle" font-size="9" fill="#666">泌乳日数（DIM）</text>\n'
+                )
+
+                # クロスヘア用プレースホルダー線
+                dim_chart_id = "dim_pr_chart"
+                crosshair_overlay = (
+                    f'<line id="{dim_chart_id}_hline" x1="{CPL}" y1="-1000" x2="{CW-CPR}" y2="-1000" stroke="#e53935" stroke-width="1.2" stroke-dasharray="5 3" opacity="0.8"/>'
+                    f'<line id="{dim_chart_id}_vline" x1="-1000" y1="{CPT}" x2="-1000" y2="{CPT+CIH}" stroke="#e53935" stroke-width="1.2" stroke-dasharray="5 3" opacity="0.8"/>'
+                    f'<text id="{dim_chart_id}_hlabel" x="{CPL+CIW-2}" y="-1000" text-anchor="end" font-size="8" fill="#e53935"></text>'
+                    f'<text id="{dim_chart_id}_vlabel" x="-1000" y="{CPT+11}" text-anchor="middle" font-size="8" fill="#e53935"></text>'
+                    f'<line id="{dim_chart_id}_chline" x1="{CPL}" y1="-1000" x2="{CW-CPR}" y2="-1000" stroke="#e53935" stroke-width="1" stroke-dasharray="3 2" opacity="0.5"/>'
+                    f'<line id="{dim_chart_id}_cvline" x1="-1000" y1="{CPT}" x2="-1000" y2="{CPT+CIH}" stroke="#e53935" stroke-width="1" stroke-dasharray="3 2" opacity="0.5"/>'
+                )
+
+                combo_svg = (
+                    f'<svg id="{dim_chart_id}_svg" viewBox="0 0 {CW} {CH}" style="width:100%;height:auto;display:block;cursor:default" xmlns="http://www.w3.org/2000/svg">\n'
+                    f'{grid_svg}{bars_svg}{surv_svg}{x_label_svg}{legend_svg}{axis_titles}{crosshair_overlay}'
+                    f'</svg>'
+                )
+
+                dim_crosshair_js = f"""
+<script>
+(function(){{
+  var cid = '{dim_chart_id}';
+  var svgEl = document.getElementById(cid + '_svg');
+  if (!svgEl) return;
+  var active = false;
+  var CPL={CPL}, CPR={CPR}, CPT={CPT}, CW={CW}, CH={CH}, CIW={CIW}, CIH={CIH};
+  var xMin={x_dim_min}, xMax={x_dim_max};
+  var btn = document.getElementById(cid + '_btn');
+
+  function svgPt(e) {{
+    var r = svgEl.getBoundingClientRect();
+    return {{
+      x: (e.clientX - r.left) * CW / r.width,
+      y: (e.clientY - r.top)  * CH / r.height
+    }};
+  }}
+  function toDataX(sx) {{ return xMin + (sx - CPL) / CIW * (xMax - xMin); }}
+  function toDataY(sy) {{ return 100 * (1 - (sy - CPT) / CIH); }}
+
+  if (btn) btn.addEventListener('click', function() {{
+    active = !active;
+    btn.style.background = active ? '#e53935' : '';
+    btn.style.color      = active ? '#fff'    : '';
+    svgEl.style.cursor   = active ? 'crosshair' : 'default';
+    if (!active) {{
+      document.getElementById(cid+'_chline').setAttribute('y1','-1000');
+      document.getElementById(cid+'_chline').setAttribute('y2','-1000');
+      document.getElementById(cid+'_cvline').setAttribute('x1','-1000');
+      document.getElementById(cid+'_cvline').setAttribute('x2','-1000');
+    }}
+  }});
+
+  svgEl.addEventListener('mousemove', function(e) {{
+    if (!active) return;
+    var p = svgPt(e);
+    var sx = Math.max(CPL, Math.min(CPL+CIW, p.x));
+    var sy = Math.max(CPT, Math.min(CPT+CIH, p.y));
+    document.getElementById(cid+'_chline').setAttribute('y1', sy.toFixed(1));
+    document.getElementById(cid+'_chline').setAttribute('y2', sy.toFixed(1));
+    document.getElementById(cid+'_cvline').setAttribute('x1', sx.toFixed(1));
+    document.getElementById(cid+'_cvline').setAttribute('x2', sx.toFixed(1));
+  }});
+
+  svgEl.addEventListener('mouseleave', function() {{
+    if (!active) return;
+    document.getElementById(cid+'_chline').setAttribute('y1','-1000');
+    document.getElementById(cid+'_chline').setAttribute('y2','-1000');
+    document.getElementById(cid+'_cvline').setAttribute('x1','-1000');
+    document.getElementById(cid+'_cvline').setAttribute('x2','-1000');
+  }});
+
+  svgEl.addEventListener('click', function(e) {{
+    if (!active) return;
+    var p = svgPt(e);
+    var sx = Math.max(CPL, Math.min(CPL+CIW, p.x));
+    var sy = Math.max(CPT, Math.min(CPT+CIH, p.y));
+    document.getElementById(cid+'_hline').setAttribute('y1', sy.toFixed(1));
+    document.getElementById(cid+'_hline').setAttribute('y2', sy.toFixed(1));
+    document.getElementById(cid+'_vline').setAttribute('x1', sx.toFixed(1));
+    document.getElementById(cid+'_vline').setAttribute('x2', sx.toFixed(1));
+    var dy = toDataY(sy);
+    var dx = toDataX(sx);
+    var hl = document.getElementById(cid+'_hlabel');
+    hl.setAttribute('y', (sy - 3).toFixed(1));
+    hl.textContent = dy.toFixed(1) + '%';
+    var vl = document.getElementById(cid+'_vlabel');
+    vl.setAttribute('x', sx.toFixed(1));
+    vl.setAttribute('y', (CPT+11).toFixed(1));
+    vl.textContent = Math.round(dx) + 'd';
+  }});
+
+  svgEl.addEventListener('dblclick', function() {{
+    document.getElementById(cid+'_hline').setAttribute('y1','-1000');
+    document.getElementById(cid+'_hline').setAttribute('y2','-1000');
+    document.getElementById(cid+'_vline').setAttribute('x1','-1000');
+    document.getElementById(cid+'_vline').setAttribute('x2','-1000');
+    document.getElementById(cid+'_hlabel').textContent='';
+    document.getElementById(cid+'_vlabel').textContent='';
+  }});
+}})();
+</script>
+"""
+
+                dim_btn_html = (
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+                    f'<div class="section-title" style="margin:0">妊娠率（DIM別）</div>'
+                    f'<button id="{dim_chart_id}_btn" style="font-size:10px;padding:3px 10px;border:1px solid #e53935;'
+                    f'border-radius:4px;background:#fff;color:#e53935;cursor:pointer;white-space:nowrap">＋ 基準線</button>'
+                    f'</div>'
+                )
+                dim_hint = '<div style="font-size:8px;color:#bbb;margin-top:2px">基準線モード：クリックで固定 / ダブルクリックでリセット</div>'
+
+                pr_dim_chart_html = (
+                    dim_btn_html
+                    + f'<div class="subheader">{html.escape(pd_start)} ～ {html.escape(pd_end)}　VWP=50日</div>\n'
+                    + combo_svg
+                    + dim_hint
+                    + dim_crosshair_js
+                )
+
         try:
             from modules.report_cow_bridge import DEFAULT_PORT as _report_open_cow_port
         except ImportError:
@@ -1484,9 +2992,40 @@ class DashboardMixin:
             gap: 24px;
             margin-top: 0;
         }}
+        .heifer-fertility-row {{
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
+            margin-top: 0;
+        }}
+        .cumulative-preg-row {{
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 16px;
+            margin-bottom: 0;
+        }}
+        .scatter-row-repro {{
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 0;
+        }}
         .herd-dynamics-row {{
             grid-column: 1 / -1;
             margin-top: 0;
+        }}
+        .pr-detail-row {{
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 24px;
+            margin-top: 0;
+        }}
+        .pr-dim-card {{
+            overflow: hidden;
         }}
         .dashboard-item:hover {{
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
@@ -1844,6 +3383,16 @@ class DashboardMixin:
                 </div>
             </div>
             
+            {f'''<div class="pr-detail-row">
+                <div class="dashboard-item">
+                    {pr_cycle_table_html}
+                </div>
+                <div class="dashboard-item pr-dim-card">
+                    {pr_dim_chart_html}
+                    {pregnancy_donut_html}
+                </div>
+            </div>''' if repro_detail else ''}
+
             <div class="fertility-row">
                 <div class="dashboard-item">
                     {monthly_fertility_table_html}
@@ -1855,6 +3404,30 @@ class DashboardMixin:
                 
                 <div class="dashboard-item">
                     {insemination_count_fertility_table_html}
+                </div>
+            </div>
+
+            <div class="cumulative-preg-row">
+                <div class="dashboard-item">
+                    {cumulative_preg_section_html}
+                </div>
+                <div class="dashboard-item">
+                    {ai_et_table_html}
+                </div>
+            </div>
+
+            <div class="scatter-row-repro">
+                <div class="dashboard-item">
+                    {first_ai_scatter_html}
+                </div>
+                <div class="dashboard-item">
+                    {rc_dim_scatter_html}
+                </div>
+            </div>
+
+            <div class="heifer-fertility-row">
+                <div class="dashboard-item">
+                    {heifer_monthly_table_html}
                 </div>
             </div>
         </div>

@@ -3065,7 +3065,11 @@ class EventInputWindow:
         target_dt = self._parse_date_safe(event_date)
         if target_dt is None:
             return warnings
-        
+
+        # 0) 未来日付チェック
+        if target_dt.date() > datetime.now().date():
+            warnings.append(f"イベント日（{event_date[:10]}）が本日より先の日付です。")
+
         events = self._get_events_for_warning_check(cow_auto_id)
         events_on_or_before = [
             e for e in events

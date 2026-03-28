@@ -152,9 +152,11 @@ def _svg_line_chart(
     values: List[Optional[float]],
     stroke: str,
     fmt_label: Callable[[float], str],
+    rotate_x: bool = False,
 ) -> str:
     w, h = 280, 188
-    pad_l, pad_r, pad_t, pad_b = 38, 10, 28, 34
+    pad_b = 50 if rotate_x else 34
+    pad_l, pad_r, pad_t = 38, 10, 28
     iw = w - pad_l - pad_r
     ih = h - pad_t - pad_b
     n = max(len(labels), 1)
@@ -181,10 +183,18 @@ def _svg_line_chart(
     # 軸ラベル（月）
     for i, lb in enumerate(labels):
         cx = x_at(i)
-        parts.append(
-            f'<text x="{cx:.1f}" y="{h - 8}" text-anchor="middle" class="milk-trend-axis-label">'
-            f"{html_module.escape(lb)}</text>"
-        )
+        if rotate_x:
+            hy = h - 6
+            parts.append(
+                f'<text x="{cx:.1f}" y="{hy}" text-anchor="end" '
+                f'transform="rotate(-40,{cx:.1f},{hy})" class="milk-trend-axis-label">'
+                f"{html_module.escape(lb)}</text>"
+            )
+        else:
+            parts.append(
+                f'<text x="{cx:.1f}" y="{h - 8}" text-anchor="middle" class="milk-trend-axis-label">'
+                f"{html_module.escape(lb)}</text>"
+            )
 
     # 折れ線セグメント
     segments: List[List[Tuple[float, float, float]]] = []
@@ -274,7 +284,7 @@ def build_monthly_trend_section_html(trend_rows: List[Dict[str, Any]]) -> str:
     )
 
     return (
-        '<div id="s-trend" class="report-layout page-break-before page-break-after milk-trend-section">'
+        '<div id="s-trend" class="report-layout page-break-before milk-trend-section">'
         '<div style="width:100%">'
         '<div class="milk-trend-heading">月次トレンド</div>'
         '<div class="rsect-sub">月次トレンド（5ヶ月分）</div>'
@@ -315,8 +325,8 @@ MILK_REPORT_COMMENT_CSS = """
         #commentEditorDiv:focus { border-color:#cc0000; box-shadow:0 0 0 2px rgba(204,0,0,.1); }
         #commentEditorDiv:empty::before { content:attr(data-placeholder); color:#aaa; pointer-events:none; font-style:italic; }
         #commentEditorDiv span[style*="background-color"] { border-radius:2px; padding:0 1px; }
-        .milk-trend-heading { font-size:16px; font-weight:700; color:#1a237e; margin:0 0 6px; padding-bottom:8px;
-          border-bottom:2px solid #e8eaf0; }
+        .milk-trend-heading { font-size:15px; font-weight:600; color:#0d6efd; margin:0 0 6px; padding-bottom:8px;
+          border-bottom:2px solid #0d6efd; }
         .rsect-sub { font-size:12px; font-weight:600; color:#5f6368; margin:0 0 8px; }
         .milk-trend-section { background:#fafbfc; }
         .milk-trend-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:4px; }
@@ -334,7 +344,7 @@ MILK_REPORT_COMMENT_CSS = """
           .comment-text { font-size:.95rem !important; }
           .comment-text span[style*="background-color"] { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
           .milk-trend-section { background:transparent !important; }
-          .milk-trend-heading { margin-bottom:4px; padding-bottom:4px; font-size:14px; }
+          .milk-trend-heading { margin-bottom:4px; padding-bottom:4px; font-size:13px; }
           .milk-trend-grid { gap:8px !important; }
           .milk-trend-chart-card { padding:6px 6px 2px !important; }
           .milk-trend-svg { max-height:180px !important; }
@@ -391,9 +401,24 @@ def build_comment_modal_html() -> str:
 """
 
 
-def build_comment_script(storage_key_js: str) -> str:
-    """storage_key_js は json.dumps でエスケープ済みの JS 文字列リテラル。"""
+def build_comment_script(storage_key_js: str, comment_zones_js: Optional[str] = None) -> str:
+    """storage_key_js は json.dumps でエスケープ済みの JS 文字列リテラル。
+    comment_zones_js を指定すると COMMENT_ZONES の定義を上書きできる（JS 配列リテラル文字列）。
+    """
     # pylint: disable=anomalous-backslash-in-string
+    zones_def = (
+        f"var COMMENT_ZONES = {comment_zones_js};"
+        if comment_zones_js
+        else """var COMMENT_ZONES = [
+  { after: 's-overview', zone: 'overview', label: '概要後' },
+  { after: 's-milkquality', zone: 'milkquality', label: '乳質後' },
+  { after: 's-firstparity', zone: 'firstparity', label: '初産成績後' },
+  { after: 's-multiparity', zone: 'multiparity', label: '2産以上後' },
+  { after: 's-anomaly', zone: 'anomaly', label: '異常牛検知後' },
+  { after: 's-trend', zone: 'trend', label: 'トレンド後' },
+  { after: 's-cowlist', zone: 'cowlist', label: '一覧アンカー後' }
+];"""
+    )
     return f"""
 <script>
 (function() {{
@@ -405,6 +430,7 @@ var commentFontSize = '0.95rem';
 var commentModeActive = false;
 var commentEditorTarget = null;
 var HIGHLIGHT_COLORS = ['#FFFF66','#66FF99','#FF99CC','#99CCFF','#FFCC66'];
+{zones_def}
 
 function rgbToHex(rgb) {{
   if (!rgb) return null;
@@ -515,15 +541,6 @@ function removeHighlight() {{
   }});
 }}
 
-var COMMENT_ZONES = [
-  {{ after: 's-overview', zone: 'overview', label: '概要後' }},
-  {{ after: 's-milkquality', zone: 'milkquality', label: '乳質後' }},
-  {{ after: 's-firstparity', zone: 'firstparity', label: '初産成績後' }},
-  {{ after: 's-multiparity', zone: 'multiparity', label: '2産以上後' }},
-  {{ after: 's-anomaly', zone: 'anomaly', label: '異常牛検知後' }},
-  {{ after: 's-trend', zone: 'trend', label: 'トレンド後' }},
-  {{ after: 's-cowlist', zone: 'cowlist', label: '一覧アンカー後' }}
-];
 
 function persistComments() {{
   try {{
@@ -769,3 +786,335 @@ window.saveCommentFromEditor = saveCommentFromEditor;
 def make_milk_report_comment_storage_key(farm_name: str, selected_date: str) -> str:
     safe_farm = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(farm_name))[:80]
     return f"falcon_milk_report_comments|{safe_farm}|{selected_date}"
+
+
+# ---------------------------------------------------------------------------
+# ⑤ 目標達成サマリーバッジ
+# ---------------------------------------------------------------------------
+
+def build_goal_badges_html(
+    avg_milk: Optional[float],
+    avg_scc: Optional[float],
+    avg_ls: Optional[float],
+    farm_goals: Dict[str, Any],
+) -> str:
+    """概要セクション先頭に表示する目標達成バッジ行。"""
+    goal_milk = farm_goals.get("average_milk_yield")
+    goal_scc  = farm_goals.get("individual_scc")
+    goal_ls   = farm_goals.get("herd_linear_score")
+
+    def _badge(label: str, value: Optional[float], goal: Optional[float],
+                fmt: Callable[[float], str], lower_is_better: bool = False) -> str:
+        if value is None or goal is None:
+            return (
+                f'<div class="goal-badge goal-badge-na">'
+                f'<span class="goal-badge-label">{html_module.escape(label)}</span>'
+                f'<span class="goal-badge-value">{fmt(value) if value is not None else "—"}</span>'
+                f'<span class="goal-badge-goal">目標 {fmt(goal) if goal is not None else "未設定"}</span>'
+                f'</div>'
+            )
+        met = (value <= goal) if lower_is_better else (value >= goal)
+        cls = "goal-badge-met" if met else "goal-badge-unmet"
+        mark = "✓" if met else "✗"
+        return (
+            f'<div class="goal-badge {cls}">'
+            f'<span class="goal-badge-mark">{mark}</span>'
+            f'<span class="goal-badge-label">{html_module.escape(label)}</span>'
+            f'<span class="goal-badge-value">{fmt(value)}</span>'
+            f'<span class="goal-badge-goal">目標 {fmt(goal)}</span>'
+            f'</div>'
+        )
+
+    badges = "".join([
+        _badge("平均乳量", avg_milk, goal_milk,
+               lambda v: f"{v:.1f} kg"),
+        _badge("平均体細胞", avg_scc, goal_scc,
+               lambda v: f"{v:.0f} 千", lower_is_better=True),
+        _badge("平均リニアスコア", avg_ls, goal_ls,
+               lambda v: f"{v:.1f}", lower_is_better=True),
+    ])
+    return f'<div class="goal-badge-row">{badges}</div>'
+
+
+GOAL_BADGE_CSS = """
+    .goal-badge-row { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+    .goal-badge { display:flex; flex-direction:column; align-items:center; padding:8px 14px;
+      border-radius:8px; min-width:110px; font-size:11px; border:1.5px solid #e0e0e0; }
+    .goal-badge-met   { background:#e8f5e9; border-color:#81c784; }
+    .goal-badge-unmet { background:#ffebee; border-color:#ef9a9a; }
+    .goal-badge-na    { background:#f5f5f5; color:#999; }
+    .goal-badge-mark  { font-size:16px; font-weight:bold; line-height:1; margin-bottom:2px; }
+    .goal-badge-met   .goal-badge-mark { color:#2e7d32; }
+    .goal-badge-unmet .goal-badge-mark { color:#c62828; }
+    .goal-badge-label { font-size:10px; color:#555; margin-bottom:2px; }
+    .goal-badge-value { font-size:15px; font-weight:bold; color:#263238; }
+    .goal-badge-goal  { font-size:10px; color:#888; margin-top:2px; }
+"""
+
+
+# ---------------------------------------------------------------------------
+# ③ 泌乳ステージ別グループ分析
+# ---------------------------------------------------------------------------
+
+def build_dim_stage_section_html(cow_data_list: List[Dict[str, Any]]) -> str:
+    """泌乳ステージ（DIM区間）ごとの平均乳量・SCC・LS・タンパク質を表示する。"""
+    stages = [
+        ("周産期",   0,   21,  "#e3f2fd", "#1565c0"),
+        ("ピーク期", 22,  60,  "#e8f5e9", "#2e7d32"),
+        ("中期",     61,  150, "#fff8e1", "#f57f17"),
+        ("後期",     151, 9999,"#fce4ec", "#880e4f"),
+    ]
+
+    def _avg(vals: List[float]) -> Optional[float]:
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    rows_html = ""
+    has_fat     = any(c.get("fat")     is not None for c in cow_data_list)
+    has_protein = any(c.get("protein") is not None for c in cow_data_list)
+
+    for label, lo, hi, bg, fg in stages:
+        group = [c for c in cow_data_list if c.get("dim") is not None and lo <= c["dim"] <= hi]
+        n = len(group)
+        milks  = [c["milk"]    for c in group if c.get("milk")    is not None]
+        sccs   = [c["scc"]     for c in group if c.get("scc")     is not None]
+        lss    = [c["ls"]      for c in group if c.get("ls")      is not None]
+        fats   = [c["fat"]     for c in group if c.get("fat")     is not None]
+        prots  = [c["protein"] for c in group if c.get("protein") is not None]
+
+        avg_m = _avg(milks)
+        avg_s = _avg(sccs)
+        avg_l = _avg(lss)
+        avg_f = _avg(fats)
+        avg_p = _avg(prots)
+
+        def _cell(v: Optional[float], fmt: str = ".1f") -> str:
+            return f"{v:{fmt}}" if v is not None else "—"
+
+        fat_td     = f'<td class="num">{_cell(avg_f)}&nbsp;%</td>' if has_fat     else ""
+        protein_td = f'<td class="num">{_cell(avg_p)}&nbsp;%</td>' if has_protein else ""
+        rows_html += (
+            f'<tr style="background:{bg}">'
+            f'<th style="color:{fg}">{html_module.escape(label)}<br>'
+            f'<span style="font-weight:normal;font-size:10px">{lo}〜{"" if hi==9999 else hi}日</span></th>'
+            f'<td class="num">{n}&nbsp;頭</td>'
+            f'<td class="num">{_cell(avg_m)}&nbsp;kg</td>'
+            f'<td class="num">{_cell(avg_s, ".0f")}&nbsp;千</td>'
+            f'<td class="num">{_cell(avg_l)}</td>'
+            f'{fat_td}'
+            f'{protein_td}'
+            f'</tr>\n'
+        )
+
+    fat_th     = "<th>乳脂肪率</th>" if has_fat     else ""
+    protein_th = "<th>乳蛋白率</th>" if has_protein else ""
+    return f"""
+<div id="s-dimstage" class="report-layout page-break-before">
+  <div style="width:100%">
+    <div class="section-title">泌乳ステージ別成績</div>
+    <table class="summary-table" style="max-width:620px">
+      <thead>
+        <tr style="background:#f5f5f5">
+          <th>ステージ</th><th>頭数</th><th>平均乳量</th><th>平均SCC</th><th>平均LS</th>
+          {fat_th}{protein_th}
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+  </div>
+</div>
+"""
+
+
+# ---------------------------------------------------------------------------
+# ① 脂肪酸組成分析
+# ---------------------------------------------------------------------------
+
+def build_fatty_acid_section_html(cow_data_list: List[Dict[str, Any]]) -> str:
+    """デノボ・ミックス・プレフォームFA 組成分析セクション。"""
+    fa_cows = [
+        c for c in cow_data_list
+        if any(c.get(k) is not None for k in ("denovo_fa", "mixed_fa", "preformed_fa"))
+    ]
+    if not fa_cows:
+        return ""
+
+    def _avg(vals: List[float]) -> Optional[float]:
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    # DIM区間ごとの平均
+    groups = [
+        ("〜60日",  [c for c in fa_cows if c.get("dim") is not None and c["dim"] <= 60]),
+        ("61日〜",  [c for c in fa_cows if c.get("dim") is not None and c["dim"] > 60]),
+        ("全体",    fa_cows),
+    ]
+
+    summary_rows = ""
+    for glabel, gcows in groups:
+        dn = _avg([c["denovo_fa"]   for c in gcows if c.get("denovo_fa")   is not None])
+        mx = _avg([c["mixed_fa"]    for c in gcows if c.get("mixed_fa")    is not None])
+        pf = _avg([c["preformed_fa"]for c in gcows if c.get("preformed_fa")is not None])
+        n  = len(gcows)
+        def _c(v: Optional[float]) -> str:
+            return f"{v:.1f}%" if v is not None else "—"
+        summary_rows += (
+            f'<tr><th>{html_module.escape(glabel)}（{n}頭）</th>'
+            f'<td class="num">{_c(dn)}</td>'
+            f'<td class="num">{_c(mx)}</td>'
+            f'<td class="num">{_c(pf)}</td></tr>\n'
+        )
+
+    # 個体ごとの積み上げ棒グラフ（SVGベース）
+    # DIMでソートして表示
+    chart_cows = sorted(
+        [c for c in fa_cows if c.get("denovo_fa") is not None or c.get("preformed_fa") is not None],
+        key=lambda c: (c.get("dim") or 0)
+    )[:60]  # 最大60頭
+
+    BAR_W, BAR_GAP = 10, 3
+    CHART_H, TOP_PAD, BOT_PAD = 100, 10, 20
+    n_bars = len(chart_cows)
+    svg_w = max(300, n_bars * (BAR_W + BAR_GAP) + 40)
+
+    bars_svg = ""
+    for i, c in enumerate(chart_cows):
+        x = 30 + i * (BAR_W + BAR_GAP)
+        dn = c.get("denovo_fa") or 0.0
+        mx = c.get("mixed_fa") or 0.0
+        pf = c.get("preformed_fa") or 0.0
+        total = dn + mx + pf
+        if total <= 0:
+            continue
+        # normalise to chart height
+        scale = CHART_H / 100.0
+        y_cur = TOP_PAD + CHART_H
+        for val, color in [(pf, "#ef9a9a"), (mx, "#fff176"), (dn, "#81d4fa")]:
+            h = val * scale
+            if h < 0.5:
+                continue
+            y_cur -= h
+            bars_svg += f'<rect x="{x}" y="{y_cur:.1f}" width="{BAR_W}" height="{h:.1f}" fill="{color}" />\n'
+        # dim label below
+        dim_v = c.get("dim")
+        bars_svg += (
+            f'<text x="{x + BAR_W/2:.1f}" y="{TOP_PAD + CHART_H + 14}" '
+            f'text-anchor="middle" font-size="7" fill="#555">'
+            f'{dim_v if dim_v is not None else ""}</text>\n'
+        )
+
+    # Y axis labels
+    y_axis = ""
+    for pct in (0, 25, 50, 75, 100):
+        y = TOP_PAD + CHART_H - pct * CHART_H / 100
+        y_axis += (
+            f'<line x1="28" y1="{y:.1f}" x2="{svg_w}" y2="{y:.1f}" stroke="#e0e0e0" stroke-width="0.5"/>\n'
+            f'<text x="26" y="{y + 3:.1f}" text-anchor="end" font-size="8" fill="#888">{pct}</text>\n'
+        )
+
+    chart_svg = (
+        f'<svg viewBox="0 0 {svg_w} {TOP_PAD + CHART_H + BOT_PAD}" '
+        f'style="width:100%;max-width:{svg_w}px;height:auto;display:block;margin-top:8px" '
+        f'xmlns="http://www.w3.org/2000/svg">\n'
+        f'{y_axis}{bars_svg}'
+        f'<text x="{svg_w//2}" y="{TOP_PAD + CHART_H + 26}" text-anchor="middle" font-size="9" fill="#555">DIM（日）</text>\n'
+        f'</svg>'
+    )
+
+    legend = (
+        '<div style="display:flex;gap:14px;font-size:11px;margin-top:4px">'
+        '<span><span style="display:inline-block;width:12px;height:12px;background:#81d4fa;border-radius:2px;vertical-align:middle;margin-right:3px"></span>デノボFA</span>'
+        '<span><span style="display:inline-block;width:12px;height:12px;background:#fff176;border:1px solid #ccc;border-radius:2px;vertical-align:middle;margin-right:3px"></span>ミックスFA</span>'
+        '<span><span style="display:inline-block;width:12px;height:12px;background:#ef9a9a;border-radius:2px;vertical-align:middle;margin-right:3px"></span>プレフォームFA</span>'
+        '</div>'
+    )
+
+    return f"""
+<div id="s-fattyacid" class="report-layout page-break-before">
+  <div style="width:100%">
+    <div class="section-title">脂肪酸組成分析</div>
+    <p class="subnote" style="margin-bottom:8px">
+      デノボFA（体内合成）が高いほどルーメン機能が良好、プレフォームFA（体脂肪動員）が高いほどエネルギー不足を示します。
+    </p>
+    <table class="summary-table" style="max-width:420px;margin-bottom:12px">
+      <thead>
+        <tr style="background:#f5f5f5">
+          <th>区分</th><th>デノボFA平均</th><th>ミックスFA平均</th><th>プレフォームFA平均</th>
+        </tr>
+      </thead>
+      <tbody>{summary_rows}</tbody>
+    </table>
+    <p class="subnote" style="margin-top:6px">
+      目安：デノボFA &gt;25%（良好）、プレフォームFA &gt;40%（体脂肪動員過多）
+    </p>
+  </div>
+</div>
+"""
+
+
+# ---------------------------------------------------------------------------
+# ④ 直近12ヶ月トレンド
+# ---------------------------------------------------------------------------
+
+def build_12month_trend_section_html(trend_rows: List[Dict[str, Any]]) -> str:
+    """直近12ヶ月のトレンドチャートセクション。"""
+    if not trend_rows:
+        return ""
+
+    # X軸ラベルを月数字のみに短縮（年変わり目は "'25/1" 形式）
+    short_labels: List[str] = []
+    prev_year: Optional[str] = None
+    for r in trend_rows:
+        raw = r["label"]
+        parts = raw.split("/")
+        if len(parts) == 2:
+            y = parts[0]
+            try:
+                m = int(parts[1])
+            except ValueError:
+                short_labels.append(raw)
+                continue
+            if y != prev_year:
+                short_labels.append(f"'{y[-2:]}/{m}")
+                prev_year = y
+            else:
+                short_labels.append(str(m))
+        else:
+            short_labels.append(raw)
+
+    period_str = f"{trend_rows[0]['label']} ～ {trend_rows[-1]['label']}" if trend_rows else ""
+
+    milk   = [r.get("avg_milk")      for r in trend_rows]
+    scc    = [r.get("avg_scc_man")   for r in trend_rows]
+    ls     = [r.get("avg_ls")        for r in trend_rows]
+    heads  = [float(r["head_count"]) if r.get("head_count") is not None else None for r in trend_rows]
+    mun    = [r.get("avg_mun")       for r in trend_rows]
+    denovo = [r.get("avg_denovo_fa") for r in trend_rows]
+
+    c_milk   = "#1976d2"
+    c_scc    = "#e53935"
+    c_ls     = "#fb8c00"
+    c_head   = "#43a047"
+    c_mun    = "#8e24aa"
+    c_denovo = "#00838f"
+
+    grid = (
+        '<div class="milk-trend-grid">'
+        + _svg_line_chart("平均乳量 (kg)",      short_labels, milk,   c_milk,   lambda v: f"{v:.1f}kg")
+        + _svg_line_chart("平均体細胞 (万/mL)", short_labels, scc,    c_scc,    lambda v: f"{v:.1f}万")
+        + _svg_line_chart("リニアスコア平均",   short_labels, ls,     c_ls,     lambda v: f"{v:.1f}")
+        + _svg_line_chart("検定頭数",           short_labels, heads,  c_head,   lambda v: f"{v:.0f}頭")
+        + _svg_line_chart("平均MUN (mg/dL)",    short_labels, mun,    c_mun,    lambda v: f"{v:.1f}")
+        + _svg_line_chart("平均デノボFA (%)",   short_labels, denovo, c_denovo, lambda v: f"{v:.1f}%")
+        + "</div>"
+    )
+
+    return (
+        '<div id="s-trend12" class="report-layout page-break-before milk-trend-section">'
+        '<div style="width:100%">'
+        '<div class="milk-trend-heading">月次トレンド（12ヶ月）</div>'
+        f'<div class="rsect-sub">{html_module.escape(period_str)}</div>'
+        f"{grid}"
+        "<p class='milk-trend-note subnote'>各月は「その月のうち最も新しい検定日」の集計です。</p>"
+        "</div></div>"
+    )

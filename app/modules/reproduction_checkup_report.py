@@ -234,6 +234,24 @@ def _get_herd_repro_metrics(
     result["avg_cci"] = round(sum(cci_list) / len(cci_list)) if cci_list else None
     result["avg_pcci"] = round(sum(pcci_list) / len(pcci_list)) if pcci_list else None
 
+    # 妊娠率（21日PR）・授精実施率（HDR）（ReproductionAnalysis）
+    try:
+        from modules.reproduction_analysis import ReproductionAnalysis
+        vwp = 50
+        analyzer = ReproductionAnalysis(db=db, rule_engine=rule_engine, formula_engine=formula_engine, vwp=vwp)
+        # period_start=None → DEFAULT_CYCLES(18)サイクル遡る（メイン画面と同じロジック）
+        pr_end = check_dt.strftime("%Y-%m-%d")
+        repro_results = analyzer.analyze(None, pr_end) or []
+        total_br_el = sum(getattr(r, "br_el", 0) or 0 for r in repro_results)
+        total_bred = sum(getattr(r, "bred", 0) or 0 for r in repro_results)
+        total_preg_el = sum(getattr(r, "preg_eligible", 0) or 0 for r in repro_results)
+        total_preg = sum(getattr(r, "preg", 0) or 0 for r in repro_results)
+        result["avg_hdr"] = round(total_bred / total_br_el * 100, 1) if total_br_el else None
+        result["avg_pr"] = round(total_preg / total_preg_el * 100, 1) if total_preg_el else None
+    except Exception:
+        result["avg_hdr"] = None
+        result["avg_pr"] = None
+
     # 受胎率・直近月の受胎率（AggregationService）
     end_d = check_dt
     start_d = dt(check_dt.year - 1, check_dt.month, 1) if check_dt.month > 1 else dt(check_dt.year - 2, 12, 1)
@@ -310,18 +328,18 @@ def _cumulative_from_monthly(monthly: List[Tuple[str, int]], year: int) -> List[
 
 
 def _configure_matplotlib_japanese() -> None:
-    """matplotlib で日本語表示用フォントを設定"""
+    """matplotlib で日本語表示用フォントを設定（HTMLレポートと統一）"""
     try:
         import matplotlib
         from matplotlib import font_manager
-        candidates = ["MS Gothic", "MS PGothic", "Meiryo", "Yu Gothic", "MS UI Gothic", "Yu Gothic UI", "IPAexGothic", "IPAPGothic"]
+        candidates = ["Meiryo UI", "Meiryo", "MS Gothic", "MS PGothic", "Yu Gothic", "MS UI Gothic", "Yu Gothic UI", "IPAexGothic", "IPAPGothic"]
         available = [f.name for f in font_manager.fontManager.ttflist]
         for name in candidates:
             if name in available:
                 matplotlib.rcParams["font.family"] = name
-                matplotlib.rcParams["axes.unicode_minus"] = False
-                return
+                break
         matplotlib.rcParams["axes.unicode_minus"] = False
+        matplotlib.rcParams["font.size"] = 9
     except Exception:
         pass
 
@@ -442,6 +460,8 @@ def _section_annual_required_pregnancies(
     parous = get_current_parous_count(db, rule_engine)
     interval, replacement, abortion = get_goal_values(settings_manager)
     result = annual_required_pregnancies(parous, float(interval), float(replacement), float(abortion))
+    month_per = round(result / 12, 1)
+    per_cycle = round(result / 24, 1)
     ref_first = get_first_parity_ratio_percent(db, rule_engine)
     ref_first_str = f"参考：現状の初産割合 {ref_first}％" if ref_first is not None else "参考：経産牛0頭のため算出不可"
 
@@ -478,7 +498,7 @@ def _section_annual_required_pregnancies(
   </div>"""
 
     return f"""
-<section class="report-section">
+<section id="s-annual" class="report-section">
   <h2 class="section-title">年間必要妊娠頭数</h2>
   <table class="param-table">
     <tr><th>想定経産牛頭数</th><td>{parous} 頭</td><td class="ref">（参考：現状 {parous} 頭）</td></tr>
@@ -490,6 +510,14 @@ def _section_annual_required_pregnancies(
   <div class="result-box">
     <span class="result-label">年間必要妊娠頭数</span>
     <span class="result-value">{result:.1f} 頭</span>
+  </div>
+  <div class="result-box">
+    <span class="result-label">月あたり必要妊娠頭数</span>
+    <span class="result-value">{month_per} 頭</span>
+  </div>
+  <div class="result-box">
+    <span class="result-label">検診あたり必要妊娠頭数</span>
+    <span class="result-value">{per_cycle} 頭</span>
   </div>
   {actual_from_jan_html}
   </div>
@@ -578,15 +606,13 @@ def _section_cumulative_pregnancy_chart(
   </div>"""
 
         return f"""
-<section class="report-section">
+<section id="s-cumulative" class="report-section">
   <h2 class="section-title">累積妊娠頭数（1月～12月）</h2>
   {chart_html}
   <div class="chart-param-row">
   <table class="param-table chart-param-table">
     <tr><th>目標分娩間隔</th><td>{int(interval)} 日</td></tr>
     <tr><th>年間必要妊娠頭数</th><td>{annual_required:.0f} 頭</td></tr>
-    <tr><th>月あたり必要妊娠頭数</th><td>{month_per} 頭</td></tr>
-    <tr><th>一回あたり必要妊娠頭数</th><td>{per_cycle} 頭</td></tr>
   </table>
   {target_achievement_html}
   </div>
@@ -595,7 +621,7 @@ def _section_cumulative_pregnancy_chart(
     except Exception as e:
         logger.exception("累積妊娠頭数グラフの生成に失敗しました")
         return f"""
-<section class="report-section">
+<section id="s-cumulative" class="report-section">
   <h2 class="section-title">累積妊娠頭数（1月～12月）</h2>
   <p class="section-desc" style="color:#c62828;">グラフの生成に失敗しました。({e!s})</p>
 </section>
@@ -617,17 +643,19 @@ def _section_repro_indicators(
         target_pregnant_ratio = goals.get("pregnant_cow_ratio", 50)
         target_first_conception = goals.get("first_service_conception_rate", 40)
         target_calving_interval = goals.get("calving_interval_days", 420)
+        target_pregnancy_rate = goals.get("pregnancy_rate", 20)
+        target_insemination_rate = goals.get("insemination_rate", 60)
 
         m = _get_herd_repro_metrics(db, rule_engine, farm_path, checkup_date)
         if not m:
             return ""
 
-        def _row(label: str, value_str: str, target_str: str = "", below_target: bool = False, target_met: bool = False) -> str:
+        def _row(label: str, value_str: str, target_str: str = "", below_target: bool = False, above_target: bool = False) -> str:
             target_part = f" （{target_str}）" if target_str else ""
             if below_target:
                 return f"<tr><th>{label}</th><td><span class=\"metric-value-below\">{value_str}</span>{target_part}</td></tr>"
-            if target_met:
-                return f"<tr><th>{label}<span class=\"metric-check\">✓</span></th><td>{value_str}</td></tr>"
+            if above_target:
+                return f"<tr><th>{label}</th><td><span class=\"metric-value-above\">{value_str}</span>{target_part}</td></tr>"
             return f"<tr><th>{label}</th><td>{value_str}{target_part}</td></tr>"
 
         rows = []
@@ -645,19 +673,29 @@ def _section_repro_indicators(
         rows.append(_row("初回授精受胎率", f"{int(v)} %" if v is not None else "—", target_str, below_target=below))
         v = m.get("avg_insemination_count")
         rows.append(_row("授精回数", f"{v} 回" if v is not None else "—", ""))
-        rows.append(_row("妊娠率", "", ""))
-        rows.append(_row("発情発見率", "", ""))
+        v = m.get("avg_pr")
+        target_str = f"{int(target_pregnancy_rate)}%" if target_pregnancy_rate is not None else ""
+        below = (v is not None and target_pregnancy_rate is not None and v < target_pregnancy_rate)
+        above = (v is not None and target_pregnancy_rate is not None and v >= target_pregnancy_rate)
+        rows.append(_row("妊娠率", f"{v} %" if v is not None else "—", target_str, below_target=below, above_target=above))
+        v = m.get("avg_hdr")
+        target_str = f"{int(target_insemination_rate)}%" if target_insemination_rate is not None else ""
+        below = (v is not None and target_insemination_rate is not None and v < target_insemination_rate)
+        above = (v is not None and target_insemination_rate is not None and v >= target_insemination_rate)
+        rows.append(_row("発情発見（授精実施）率", f"{v} %" if v is not None else "—", target_str, below_target=below, above_target=above))
         v = m.get("conception_rate")
         rows.append(_row("受胎率", f"{int(v)} %" if v is not None else "—", ""))
         v = m.get("conception_rate_recent_month")
         rows.append(_row("直近月の受胎率", f"{int(v)} %" if v is not None else "—", ""))
         v = m.get("avg_cci")
-        target_met = (v is not None and target_calving_interval is not None and v <= target_calving_interval)
-        rows.append(_row("分娩間隔", f"{v} 日" if v is not None else "—", "", target_met=target_met))
+        below = (v is not None and target_calving_interval is not None and v > target_calving_interval)
+        above = (v is not None and target_calving_interval is not None and v <= target_calving_interval)
+        rows.append(_row("分娩間隔", f"{v} 日" if v is not None else "—", "", below_target=below, above_target=above))
         v = m.get("avg_pcci")
         target_str = f"{int(target_calving_interval)} 日" if target_calving_interval else ""
         below = (v is not None and target_calving_interval is not None and v > target_calving_interval)
-        rows.append(_row("予定分娩間隔", f"{v} 日" if v is not None else "—", target_str, below_target=below))
+        above = (v is not None and target_calving_interval is not None and v <= target_calving_interval)
+        rows.append(_row("予定分娩間隔", f"{v} 日" if v is not None else "—", target_str, below_target=below, above_target=above))
 
         rows_html = "\n    ".join(rows)
         pregnant_pct = m.get("pregnant_cow_ratio")
@@ -684,7 +722,7 @@ def _section_repro_indicators(
     <span class="leg-non">非妊娠: {non_pregnant_count}頭（{int(round(non_pct))}%）</span>
   </div>"""
         return f"""
-<section class="report-section">
+<section id="s-repro" class="report-section">
   <h2 class="section-title">繁殖指標</h2>
   <div class="repro-indicators-row">
   <table class="param-table metric-table">
@@ -698,6 +736,333 @@ def _section_repro_indicators(
 """
     except Exception as e:
         logger.exception("繁殖指標の算出に失敗しました")
+        return ""
+
+
+def _section_conception_heatmap(
+    db: DBHandler,
+    farm_path: Path,
+    checkup_date: str,
+) -> str:
+    """② 産次別・月別受胎率ヒートマップ（直近12ヶ月）"""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        import base64
+        import io
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+        from matplotlib import colors as mcolors
+
+        _configure_matplotlib_japanese()
+
+        check_dt = datetime.strptime(checkup_date[:10], "%Y-%m-%d")
+        end_d = check_dt
+        start_d = (check_dt.replace(day=1) - __import__("datetime").timedelta(days=1)).replace(day=1)
+        # 直近12ヶ月
+        months = []
+        d = check_dt.replace(day=1)
+        for _ in range(12):
+            months.append(d.strftime("%Y-%m"))
+            if d.month == 1:
+                d = d.replace(year=d.year - 1, month=12)
+            else:
+                d = d.replace(month=d.month - 1)
+        months.reverse()
+        start_str = months[0] + "-01"
+        end_str = check_dt.strftime("%Y-%m-%d")
+
+        agg = AggregationService(db)
+        rows = agg.conception_rate_by_month_and_lact(start_str, end_str)
+        row_map = {r["ym"]: r for r in rows}
+
+        lact_keys = [
+            ("lact1_numerator",    "lact1_denominator",    "1産"),
+            ("lact2_numerator",    "lact2_denominator",    "2産"),
+            ("lact3plus_numerator","lact3plus_denominator","3産以上"),
+        ]
+        n_months = len(months)
+        n_lact = len(lact_keys)
+
+        rate_matrix = np.full((n_lact, n_months), np.nan)
+        denom_matrix = np.zeros((n_lact, n_months), dtype=int)
+        for mi, ym in enumerate(months):
+            r = row_map.get(ym, {})
+            for li, (nk, dk, _) in enumerate(lact_keys):
+                den = r.get(dk) or 0
+                num = r.get(nk) or 0
+                denom_matrix[li, mi] = den
+                if den > 0:
+                    rate_matrix[li, mi] = num / den * 100
+
+        fig = Figure(figsize=(8.0, 2.2), dpi=100)
+        ax = fig.add_subplot(111)
+        cmap = mcolors.LinearSegmentedColormap.from_list("wr_blue", ["#ffffff", "#1565c0"])
+        masked = np.ma.masked_invalid(rate_matrix)
+        im = ax.imshow(masked, aspect="auto", cmap=cmap, vmin=0, vmax=100)
+        ax.set_xticks(range(n_months))
+        ax.set_xticklabels([m[5:] + "月" for m in months], fontsize=8, rotation=45, ha="right")
+        ax.set_yticks(range(n_lact))
+        ax.set_yticklabels([lk[2] for lk in lact_keys], fontsize=9)
+        for li in range(n_lact):
+            for mi in range(n_months):
+                den = denom_matrix[li, mi]
+                if den == 0:
+                    ax.text(mi, li, "—", ha="center", va="center", fontsize=8, color="#aaa")
+                else:
+                    v = rate_matrix[li, mi]
+                    txt = f"{v:.0f}%\n({den})"
+                    fc = "white" if v >= 55 else "#263238"
+                    ax.text(mi, li, txt, ha="center", va="center", fontsize=7.5, color=fc)
+        fig.colorbar(im, ax=ax, orientation="vertical", fraction=0.02, pad=0.01,
+                     label="受胎率 %")
+        fig.tight_layout(pad=0.6)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+        buf.seek(0)
+        png_b64 = base64.b64encode(buf.read()).decode("utf-8")
+
+        return f"""
+<section id="s-heatmap" class="report-section">
+  <h2 class="section-title">産次別・月別受胎率（直近12ヶ月）</h2>
+  <div class="chart-wrapper">
+    <img src="data:image/png;base64,{png_b64}" alt="受胎率ヒートマップ" class="cumulative-chart-img" />
+  </div>
+</section>
+"""
+    except Exception:
+        logger.exception("受胎率ヒートマップの生成に失敗しました")
+        return ""
+
+
+def _section_open_days_histogram(
+    db: DBHandler,
+    rule_engine: RuleEngine,
+    checkup_date: str,
+) -> str:
+    """③ 空胎日数分布ヒストグラム（現在の経産牛）"""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        import base64
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+
+        _configure_matplotlib_japanese()
+
+        check_dt = datetime.strptime(checkup_date[:10], "%Y-%m-%d")
+        parous = get_parous_cows(db, rule_engine)
+
+        bins = [0, 50, 85, 115, 150, 200, 300, 99999]
+        labels = ["~50", "51~85\n(VWP~)", "86~115\n(適期)", "116~150", "151~200", "201~300", "300超"]
+        counts = [0] * len(labels)
+        colors_bar = ["#1976d2"] * len(labels)
+
+        for c in parous:
+            rc = c.get("rc")
+            if rc in (1, 5, 6):
+                continue  # 繁殖中止・妊娠中・乾乳は除外
+            clvd = c.get("clvd")
+            if not clvd:
+                continue
+            try:
+                clvd_dt = datetime.strptime(clvd[:10], "%Y-%m-%d")
+                open_days = (check_dt - clvd_dt).days
+                if open_days < 0:
+                    continue
+                for i in range(len(bins) - 1):
+                    if bins[i] <= open_days < bins[i + 1]:
+                        counts[i] += 1
+                        break
+            except (ValueError, TypeError):
+                pass
+
+        total = sum(counts)
+        fig = Figure(figsize=(7.2, 2.8), dpi=100)
+        ax = fig.add_subplot(111)
+        bars = ax.bar(range(len(labels)), counts, color=colors_bar, edgecolor="white", linewidth=0.8)
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, fontsize=8)
+        ax.set_ylabel("頭数", fontsize=9)
+        ax.set_xlabel("空胎日数", fontsize=9)
+        for bar, cnt in zip(bars, counts):
+            if cnt > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.15,
+                        str(cnt), ha="center", va="bottom", fontsize=9, fontweight="bold")
+        ax.set_title(f"未受胎経産牛の空胎日数分布（対象 {total} 頭）", fontsize=10)
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout(pad=0.6)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+        buf.seek(0)
+        png_b64 = base64.b64encode(buf.read()).decode("utf-8")
+
+        return f"""
+<section id="s-opendays" class="report-section">
+  <h2 class="section-title">空胎日数分布（未受胎経産牛）</h2>
+  <div class="chart-wrapper">
+    <img src="data:image/png;base64,{png_b64}" alt="空胎日数分布" class="cumulative-chart-img" />
+  </div>
+</section>
+"""
+    except Exception:
+        logger.exception("空胎日数分布の生成に失敗しました")
+        return ""
+
+
+def _section_period_comparison(
+    db: DBHandler,
+    rule_engine: RuleEngine,
+    farm_path: Path,
+    checkup_date: str,
+) -> str:
+    """④ 直近3ヶ月 vs 前3ヶ月の繁殖指標比較"""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from datetime import timedelta
+
+        check_dt = datetime.strptime(checkup_date[:10], "%Y-%m-%d")
+        # 直近3ヶ月
+        rec_end = check_dt
+        rec_start = (check_dt.replace(day=1) - timedelta(days=1)).replace(day=1)
+        for _ in range(2):
+            rec_start = (rec_start.replace(day=1) - timedelta(days=1)).replace(day=1)
+        # 前3ヶ月
+        prev_end = rec_start - timedelta(days=1)
+        prev_start = prev_end.replace(day=1)
+        for _ in range(2):
+            prev_start = (prev_start.replace(day=1) - timedelta(days=1)).replace(day=1)
+
+        def _calc_metrics(start_dt: datetime, end_dt: datetime) -> Dict[str, Any]:
+            s = start_dt.strftime("%Y-%m-%d")
+            e = end_dt.strftime("%Y-%m-%d")
+            agg = AggregationService(db)
+            rows = agg.conception_rate_by_month_and_lact(s, e)
+            total_num = sum(r.get("total_numerator") or 0 for r in rows)
+            total_den = sum(r.get("total_denominator") or 0 for r in rows)
+            cr = round(total_num / total_den * 100, 1) if total_den else None
+            return {"cr": cr}
+
+        rec = _calc_metrics(rec_start, rec_end)
+        prev = _calc_metrics(prev_start, prev_end)
+
+        def _diff_html(cur, prv, higher_is_better: bool = True) -> str:
+            if cur is None or prv is None:
+                return "<td>—</td><td>—</td><td></td>"
+            delta = cur - prv
+            if abs(delta) < 0.05:
+                arrow = "→"
+                color = "#666"
+            elif (delta > 0) == higher_is_better:
+                arrow = f"↑ +{delta:.1f}"
+                color = "#2e7d32"
+            else:
+                arrow = f"↓ {delta:.1f}"
+                color = "#c62828"
+            return (f"<td>{prv:.1f} %</td><td>{cur:.1f} %</td>"
+                    f"<td style=\"color:{color};font-weight:bold\">{arrow}</td>")
+
+        rec_label = f"{rec_start.strftime('%Y/%m')}〜{rec_end.strftime('%Y/%m')}"
+        prev_label = f"{prev_start.strftime('%Y/%m')}〜{prev_end.strftime('%Y/%m')}"
+
+        return f"""
+<section id="s-comparison" class="report-section">
+  <h2 class="section-title">期間比較（直近3ヶ月 vs 前3ヶ月）</h2>
+  <table class="param-table" style="max-width:560px">
+    <thead>
+      <tr style="background:#f5f5f5">
+        <th>指標</th>
+        <th>前期 {prev_label}</th>
+        <th>直近 {rec_label}</th>
+        <th>変化</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><th>受胎率</th>{_diff_html(rec["cr"], prev["cr"])}</tr>
+    </tbody>
+  </table>
+</section>
+"""
+    except Exception:
+        logger.exception("期間比較の生成に失敗しました")
+        return ""
+
+
+def _section_parity_distribution(
+    db: DBHandler,
+    rule_engine: RuleEngine,
+    checkup_date: str,
+) -> str:
+    """⑤ 産次構成グラフ（現在の経産牛）"""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        import base64
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+
+        _configure_matplotlib_japanese()
+
+        parous = get_parous_cows(db, rule_engine)
+        from collections import Counter
+        lact_counter: Counter = Counter()
+        for c in parous:
+            lact = c.get("lact") or 0
+            key = min(lact, 7)
+            lact_counter[key] += 1
+
+        max_lact = max(lact_counter.keys()) if lact_counter else 6
+        max_lact = max(max_lact, 6)
+        x_vals = list(range(1, max_lact + 1))
+        counts = [lact_counter.get(i, 0) for i in x_vals]
+        labels = [f"{i}産" if i < max_lact else f"{i}産以上" for i in x_vals]
+        total = sum(counts)
+
+        bar_colors = ["#1976d2"] * len(x_vals)
+
+        fig = Figure(figsize=(6.0, 2.8), dpi=100)
+        ax = fig.add_subplot(111)
+        bars = ax.bar(range(len(x_vals)), counts, color=bar_colors, edgecolor="white", linewidth=0.8)
+        ax.set_xticks(range(len(x_vals)))
+        ax.set_xticklabels(labels, fontsize=9)
+        ax.set_ylabel("頭数", fontsize=9)
+        for bar, cnt in zip(bars, counts):
+            if cnt > 0:
+                pct = cnt / total * 100 if total else 0
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
+                        f"{cnt}頭\n({pct:.0f}%)", ha="center", va="bottom", fontsize=8)
+        ax.set_title(f"産次構成（経産牛 {total} 頭）", fontsize=10)
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout(pad=0.6)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+        buf.seek(0)
+        png_b64 = base64.b64encode(buf.read()).decode("utf-8")
+
+        return f"""
+<section id="s-parity" class="report-section">
+  <h2 class="section-title">産次構成</h2>
+  <div class="chart-wrapper">
+    <img src="data:image/png;base64,{png_b64}" alt="産次構成" class="cumulative-chart-img" />
+  </div>
+</section>
+"""
+    except Exception:
+        logger.exception("産次構成グラフの生成に失敗しました")
         return ""
 
 
@@ -729,10 +1094,46 @@ def build_report_html(
     sections_html.append(
         _section_repro_indicators(db, rule_engine, farm_path, checkup_date)
     )
-    # ここに将来のセクションを追加
-    # sections_html.append(_section_xxx(...))
+    # セクション4: 産次別・月別受胎率ヒートマップ
+    sections_html.append(
+        _section_conception_heatmap(db, farm_path, checkup_date)
+    )
+    # セクション5: 空胎日数分布
+    sections_html.append(
+        _section_open_days_histogram(db, rule_engine, checkup_date)
+    )
+    # セクション6: 期間比較（直近3ヶ月 vs 前3ヶ月）
+    sections_html.append(
+        _section_period_comparison(db, rule_engine, farm_path, checkup_date)
+    )
+    # セクション7: 産次構成
+    sections_html.append(
+        _section_parity_distribution(db, rule_engine, checkup_date)
+    )
 
     body_sections = "\n".join(sections_html)
+
+    import json as _json
+    import re as _re
+    from modules.milk_report_extras import (
+        MILK_REPORT_COMMENT_CSS,
+        build_comment_modal_html,
+        build_comment_script,
+    )
+    safe_farm = _re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(farm_name))[:80]
+    storage_key = f"falcon_repro_report_comments|{safe_farm}|{checkup_date}"
+    storage_key_js = _json.dumps(storage_key)
+    repro_zones_js = """[
+  { "after": "s-annual",     "zone": "annual",     "label": "年間必要妊娠頭数後" },
+  { "after": "s-cumulative", "zone": "cumulative", "label": "累積妊娠グラフ後" },
+  { "after": "s-repro",      "zone": "repro",      "label": "繁殖指標後" },
+  { "after": "s-heatmap",    "zone": "heatmap",    "label": "受胎率ヒートマップ後" },
+  { "after": "s-opendays",   "zone": "opendays",   "label": "空胎日数後" },
+  { "after": "s-comparison", "zone": "comparison", "label": "期間比較後" },
+  { "after": "s-parity",     "zone": "parity",     "label": "産次構成後" }
+]"""
+    comment_modal = build_comment_modal_html()
+    comment_script = build_comment_script(storage_key_js, comment_zones_js=repro_zones_js)
 
     return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -740,6 +1141,8 @@ def build_report_html(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>繁殖検診レポート</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Yomogi&family=Hachi+Maru+Pop&family=Klee+One&family=Zen+Kurenaido&family=Yuji+Syuku&display=swap" rel="stylesheet">
   <style>
     body {{ font-family: "Meiryo UI", "MS Gothic", sans-serif; font-size: 13px; margin: 24px; background: #f5f5f5; color: #263238; }}
     .report-container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
@@ -772,8 +1175,8 @@ def build_report_html(
     .chart-target-achievement-value {{ font-size: 18px; font-weight: bold; color: #1565c0; }}
     .chart-target-achievement-pct {{ font-size: 12px; color: #666; margin-left: 4px; }}
     .metric-table {{ font-size: 12px; }}
-    .metric-value-below {{ background: #ffcdd2; padding: 2px 6px; }}
-    .metric-check {{ color: #2e7d32; margin-left: 4px; font-weight: bold; }}
+    .metric-value-below {{ background: #ffcdd2; padding: 2px 6px; border-radius: 3px; }}
+    .metric-value-above {{ background: #c8e6c9; padding: 2px 6px; border-radius: 3px; }}
     .repro-indicators-row {{ display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }}
     .repro-indicators-row .param-table {{ margin-bottom: 0; flex-shrink: 0; }}
     .repro-donut-wrap {{ flex-shrink: 0; width: 200px; }}
@@ -805,14 +1208,23 @@ def build_report_html(
       .repro-donut-wrap {{ width: 160px; }}
       @page {{ size: A4; margin: 12mm; }}
     }}
+    {MILK_REPORT_COMMENT_CSS}
   </style>
 </head>
 <body>
   <div class="report-container">
-    <h1>繁殖検診レポート</h1>
+    <div class="milk-report-toolbar">
+      <h1 style="margin:0;flex:1">繁殖検診レポート</h1>
+      <button type="button" class="btn-ghost btn-comment-mode" onclick="toggleCommentMode()">✏ コメントモード</button>
+      <button type="button" class="btn-ghost" onclick="window.print()">🖨 印刷</button>
+    </div>
     <p class="report-date">検診日：{checkup_date}　農場：{farm_name}</p>
+    <div id="main-content">
     {body_sections}
+    </div>
   </div>
+  {comment_modal}
+  {comment_script}
 </body>
 </html>
 """

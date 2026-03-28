@@ -332,10 +332,10 @@ class GenomeReportWindow:
         self.window.destroy()
 
     def _create_widgets(self, other_keys: List[str]):
+        self._build_header()
+
         main = ttk.Frame(self.window, padding=0)
         main.pack(fill=tk.BOTH, expand=True)
-
-        self._build_header()
 
         # 設定カード（期間・総合指数・散布図を1ブロックに）
         settings_card = tk.Frame(main, bg=_THEME["bg"], padx=24, pady=0)
@@ -352,9 +352,12 @@ class GenomeReportWindow:
 
         top_row = tk.Frame(card_inner, bg=_THEME["card_highlight"])
         top_row.pack(fill=tk.X)
+        top_row.columnconfigure(0, weight=3)
+        top_row.columnconfigure(1, weight=2)
+        top_row.columnconfigure(2, weight=2)
 
         period_f = ttk.LabelFrame(top_row, text="生年月日で期間を設定", padding=6)
-        period_f.pack(side=tk.LEFT, fill=tk.X, padx=(0, 16))
+        period_f.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
         pr = ttk.Frame(period_f)
         pr.pack(fill=tk.X)
         ttk.Label(pr, text="開始").pack(side=tk.LEFT, padx=(0, 4))
@@ -364,7 +367,7 @@ class GenomeReportWindow:
         ttk.Label(pr, text="(YYYY-MM-DD)", font=UI_FONT).pack(side=tk.LEFT, padx=(6, 0))
 
         comp_f = ttk.LabelFrame(top_row, text="総合指数（1つ選択）", padding=6)
-        comp_f.pack(side=tk.LEFT, fill=tk.X, padx=(0, 16))
+        comp_f.grid(row=0, column=1, sticky=tk.NSEW, padx=(0, 10))
         for key in COMPOSITE_INDEX_KEYS:
             ttk.Radiobutton(
                 comp_f,
@@ -374,7 +377,7 @@ class GenomeReportWindow:
             ).pack(anchor=tk.W)
 
         opt_f = ttk.LabelFrame(top_row, text="散布図", padding=6)
-        opt_f.pack(side=tk.LEFT, fill=tk.X)
+        opt_f.grid(row=0, column=2, sticky=tk.NSEW)
         ttk.Checkbutton(opt_f, text="近似曲線", variable=self.show_trend_var).pack(anchor=tk.W)
         ttk.Checkbutton(opt_f, text="平均線", variable=self.show_avg_line_var).pack(anchor=tk.W)
 
