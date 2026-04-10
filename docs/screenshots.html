@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FALCON – 画面紹介</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: "Noto Sans JP", "Meiryo UI", "Yu Gothic UI", sans-serif;
+      color: #1c2333; background: #f5f6fa; line-height: 1.7;
+    }
+    a { text-decoration: none; color: inherit; }
+    img { max-width: 100%; display: block; }
+
+    :root {
+      --navy:   #1e2a3a;
+      --navy2:  #2d3e50;
+      --accent: #2e7dcc;
+      --light:  #f5f6fa;
+      --border: #dde1e7;
+      --sub:    #6b7280;
+    }
+
+    /* ── ナビ ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: var(--navy);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 48px; height: 64px;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 1.4rem; font-weight: 700; color: #fff; letter-spacing: 0.08em; line-height: 1;
+    }
+    .nav-logo img { height: 36px; width: 36px; object-fit: contain; border-radius: 6px; flex-shrink: 0; }
+    .nav-logo span { color: #7ec8f4; }
+    .nav-back {
+      color: rgba(255,255,255,0.75); font-size: 0.88rem;
+      padding: 8px 20px; border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 6px; transition: background 0.2s;
+    }
+    .nav-back:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+    /* ── ヘッダー ── */
+    .page-header {
+      background: var(--navy);
+      color: #fff; text-align: center;
+      padding: 56px 48px 48px;
+    }
+    .page-header h1 {
+      font-size: clamp(1.6rem, 3vw, 2.2rem); font-weight: 800; margin-bottom: 12px;
+    }
+    .page-header p { color: rgba(255,255,255,0.6); font-size: 0.96rem; }
+
+    /* ── スクリーンショットグリッド ── */
+    .gallery {
+      max-width: 1200px; margin: 0 auto;
+      padding: 64px 48px;
+      display: flex; flex-direction: column; gap: 64px;
+    }
+
+    .gallery-item { background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(30,42,58,0.08); }
+    .gallery-item.reverse { direction: rtl; }
+    .gallery-item.reverse > * { direction: ltr; }
+
+    .gallery-inner {
+      display: grid; grid-template-columns: 1fr 340px;
+      align-items: stretch;
+    }
+    .gallery-item.reverse .gallery-inner { grid-template-columns: 340px 1fr; }
+
+    /* ウィンドウ枠 */
+    .app-window { background: #1e2a3a; }
+    .win-titlebar {
+      background: #2d3748; padding: 10px 14px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .win-dot { width: 11px; height: 11px; border-radius: 50%; }
+    .win-dot-r { background: #ff5f57; }
+    .win-dot-y { background: #febc2e; }
+    .win-dot-g { background: #28c840; }
+    .win-title { font-size: 0.72rem; color: rgba(255,255,255,0.45); margin-left: 8px; }
+    .win-body img { width: 100%; }
+
+    /* 説明パネル */
+    .gallery-desc {
+      padding: 40px 36px;
+      display: flex; flex-direction: column; justify-content: center; gap: 16px;
+    }
+    .gallery-tag {
+      display: inline-block;
+      background: rgba(46,125,204,0.12); color: var(--accent);
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+      padding: 3px 12px; border-radius: 4px; width: fit-content;
+    }
+    .gallery-num {
+      font-size: 0.78rem; color: var(--sub); font-weight: 700; letter-spacing: 0.06em;
+    }
+    .gallery-desc h2 {
+      font-size: 1.3rem; font-weight: 800; color: var(--navy); line-height: 1.3;
+    }
+    .gallery-desc p { font-size: 0.9rem; color: var(--sub); line-height: 1.75; }
+    .gallery-points {
+      list-style: none; display: flex; flex-direction: column; gap: 6px;
+      font-size: 0.88rem; color: #3d4a5c;
+    }
+    .gallery-points li::before { content: "✓ "; color: #22a05a; font-weight: 700; }
+
+    /* ── フッター ── */
+    footer {
+      background: #0d1b2a; color: rgba(255,255,255,0.45);
+      text-align: center; padding: 32px 48px;
+      font-size: 0.82rem; line-height: 1.8;
+    }
+    footer strong { color: rgba(255,255,255,0.75); }
+    .footer-cta {
+      display: inline-block; margin-top: 16px;
+      background: var(--accent); color: #fff;
+      padding: 12px 32px; border-radius: 8px;
+      font-weight: 700; font-size: 0.92rem; letter-spacing: 0.04em;
+      transition: background 0.2s;
+    }
+    .footer-cta:hover { background: #2569ad; }
+
+    /* ── レスポンシブ ── */
+    @media (max-width: 860px) {
+      nav { padding: 0 20px; }
+      .page-header { padding: 40px 20px 32px; }
+      .gallery { padding: 40px 20px; gap: 40px; }
+      .gallery-inner { grid-template-columns: 1fr; }
+      .gallery-item.reverse .gallery-inner { grid-template-columns: 1fr; }
+      .gallery-item.reverse { direction: ltr; }
+      .gallery-desc { padding: 28px 24px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ナビ -->
+<nav>
+  <div class="nav-logo">
+    <img src="assets/logo.png" alt="FALCON">
+    <span class="logo-text">FAL<span>CON</span></span>
+  </div>
+  <a href="index.html" class="nav-back">← トップページへ</a>
+</nav>
+
+<!-- ヘッダー -->
+<div class="page-header">
+  <h1>FALCON 画面紹介</h1>
+  <p>現場で動いているFALCONの実際の画面をご覧ください。</p>
+</div>
+
+<!-- ギャラリー -->
+<div class="gallery">
+
+  <!-- 1. ダッシュボード -->
+  <div class="gallery-item">
+    <div class="gallery-inner">
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — ダッシュボード</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide06_img06.png" alt="ダッシュボード画面">
+        </div>
+      </div>
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 01 / 08</span>
+        <span class="gallery-tag">ダッシュボード</span>
+        <h2>農場の状態を<br>一画面で把握</h2>
+        <p>経産牛頭数・21日妊娠率・平均受胎率・平均乳量などの主要KPIを自動集計。訪問前にこの画面を確認するだけで、その日の農場状況を把握できます。</p>
+        <ul class="gallery-points">
+          <li>繁殖・分娩・乳量を一画面に集約</li>
+          <li>長期空胎牛・分娩超過牛を自動ハイライト</li>
+          <li>農家への説明資料として活用可能</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. 21日妊娠率 -->
+  <div class="gallery-item reverse">
+    <div class="gallery-inner">
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 02 / 08</span>
+        <span class="gallery-tag">繁殖管理</span>
+        <h2>21日妊娠率<br>サイクル別分析</h2>
+        <p>世界標準のロジックで18サイクル分の妊娠率・授精率・受胎率を自動集計。問題のあるサイクルを視覚的に特定し、「いつから」「何が」悪化したかを即座に把握できます。</p>
+        <ul class="gallery-points">
+          <li>DC305互換ロジックで正確な数値を算出</li>
+          <li>サイクル別グラフで傾向を可視化</li>
+          <li>個体レベルの詳細もクリック一つで確認</li>
+        </ul>
+      </div>
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 21日妊娠率（サイクル別）</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide01_img01.png" alt="21日妊娠率画面">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 繁殖検診レポート -->
+  <div class="gallery-item">
+    <div class="gallery-inner">
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 繁殖検診レポート</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide05_img05.png" alt="繁殖検診レポート画面">
+        </div>
+      </div>
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 03 / 08</span>
+        <span class="gallery-tag">繁殖検診</span>
+        <h2>検診レポートを<br>自動生成</h2>
+        <p>累積妊娠頭数グラフ・繁殖指標一覧・ドーナツチャートを自動生成。農家への説明資料がそのまま出来上がります。定期検診の記録・追跡も一元管理。</p>
+        <ul class="gallery-points">
+          <li>検診ごとの妊娠率・受胎率・発情発見率を自動集計</li>
+          <li>累積グラフで成績トレンドを可視化</li>
+          <li>検診結果の入力からレポートまでワンストップ</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. 個体カード -->
+  <div class="gallery-item reverse">
+    <div class="gallery-inner">
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 04 / 08</span>
+        <span class="gallery-tag">個体管理</span>
+        <h2>1頭ごとの全情報を<br>時系列で把握</h2>
+        <p>繁殖・分娩・乳量・ゲノム情報を時系列で可視化。イベント履歴を即検索でき、診察・指導の根拠をその場で確認できます。乳量とリニアスコアの推移グラフも自動表示。</p>
+        <ul class="gallery-points">
+          <li>繁殖履歴・分娩履歴・乳検を一画面で確認</li>
+          <li>AI・妊娠鑑定・繁殖検診を時系列表示</li>
+          <li>乳量・リニアスコア推移グラフを自動生成</li>
+        </ul>
+      </div>
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 個体カード</span>
+        </div>
+        <div class="win-body">
+          <img src="img/pptx_slide09.png" alt="個体カード画面">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. ゲノムレポート -->
+  <div class="gallery-item">
+    <div class="gallery-inner">
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — ゲノム総合指標順位表</span>
+        </div>
+        <div class="win-body">
+          <img src="img/pptx_slide08.png" alt="ゲノム総合指標順位表">
+        </div>
+      </div>
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 05 / 08</span>
+        <span class="gallery-tag">ゲノム</span>
+        <h2>ゲノム評価を<br>農場管理に活かす</h2>
+        <p>ゲノム評価レポートを取り込み、GDNPS総合指標で全個体を自動ランキング。後継牛候補の選定や廃用判断の根拠として活用できます。</p>
+        <ul class="gallery-points">
+          <li>ゲノムデータをワンクリックで取り込み</li>
+          <li>総合指標・乳量・体型・繁殖性能を一覧比較</li>
+          <li>色分け表示で優良牛・要注目牛を即把握</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. 繁殖検診フロー -->
+  <div class="gallery-item reverse">
+    <div class="gallery-inner">
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 06 / 08</span>
+        <span class="gallery-tag">繁殖検診</span>
+        <h2>検診業務を<br>ワンストップで管理</h2>
+        <p>AI/ET入力・分娩入力・導入・退出・検診入力・レポート出力まで、繁殖検診に関わるすべての操作をひとつのフロー画面に集約。手順に迷わず業務を進められます。</p>
+        <ul class="gallery-points">
+          <li>AI/ET・妊娠鑑定をその場で入力</li>
+          <li>エクセル一括取り込み・テンプレート出力に対応</li>
+          <li>検診結果からレポートまでシームレスに完結</li>
+        </ul>
+      </div>
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 繁殖検診フロー</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide04_img04.png" alt="繁殖検診フロー画面">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. 乳検分析レポート -->
+  <div class="gallery-item">
+    <div class="gallery-inner">
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 乳検分析レポート</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide07_img07.png" alt="乳検分析レポート画面">
+        </div>
+      </div>
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 07 / 08</span>
+        <span class="gallery-tag">乳質・乳量</span>
+        <h2>乳検データを<br>多角的に分析</h2>
+        <p>DHI乳検データを取り込み、平均乳量・体細胞数・リニアスコアを自動集計。乳量分布・リニアスコア分布をグラフで可視化し、牛群の乳質管理をサポートします。</p>
+        <ul class="gallery-points">
+          <li>平均乳量・体細胞・産次構成を一覧表示</li>
+          <li>乳量とリニアスコアの散布図を自動生成</li>
+          <li>妊娠中個体を色別ハイライトで識別</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. 妊娠率（サイクル別・DIM別）グラフ -->
+  <div class="gallery-item reverse">
+    <div class="gallery-inner">
+      <div class="gallery-desc">
+        <span class="gallery-num">SCREEN 08 / 08</span>
+        <span class="gallery-tag">繁殖分析</span>
+        <h2>サイクル別・DIM別の<br>詳細繁殖分析</h2>
+        <p>妊娠率をサイクルごと、DIM（泌乳日数）ごとに集計してグラフ化。どのサイクル・DIM帯で成績が落ちているかを視覚的に把握できます。</p>
+        <ul class="gallery-points">
+          <li>妊娠率・授精率を95%信頼区間付きで表示</li>
+          <li>空胎残存率（オレンジ線）で群の空胎状況を把握</li>
+          <li>サイクル別・DIM別・受胎率別など複数の切り口で分析可能</li>
+        </ul>
+      </div>
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 妊娠率（サイクル別・DIM別）</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide02_img02.png" alt="妊娠率サイクル別・DIM別グラフ画面">
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /gallery -->
+
+
+<!-- フッター CTA -->
+<footer>
+  <p>
+    <strong>FALCON</strong> を実際の担当農場データでお試しください。<br>
+    30日間の無料トライアルで、すべての機能を制限なく使えます。
+  </p>
+  <a href="index.html#cta" class="footer-cta">無料トライアルを申し込む</a>
+  <p style="margin-top: 24px;">
+    <strong>FALCON</strong> — Farm Analysis for Lactating Cattle Optimization (Nippon Model)<br>
+    開発: 大脇 茂雄（臨床獣医師）<br>
+    <a href="mailto:shigeo.o.dvm@gmail.com" style="color:rgba(255,255,255,0.5)">shigeo.o.dvm@gmail.com</a>
+  </p>
+  <p style="margin-top: 12px;">© 2026 FALCON. All rights reserved.</p>
+</footer>
+
+</body>
+</html>

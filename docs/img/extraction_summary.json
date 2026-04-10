@@ -1,0 +1,79 @@
+[
+  {
+    "slide": 1,
+    "texts": [],
+    "images": [
+      {
+        "filename": "slide01_img01.png",
+        "size_bytes": 304601,
+        "content_type": "image/png"
+      }
+    ]
+  },
+  {
+    "slide": 2,
+    "texts": [],
+    "images": [
+      {
+        "filename": "slide02_img02.png",
+        "size_bytes": 134960,
+        "content_type": "image/png"
+      }
+    ]
+  },
+  {
+    "slide": 3,
+    "texts": [],
+    "images": [
+      {
+        "filename": "slide03_img03.png",
+        "size_bytes": 276558,
+        "content_type": "image/png"
+      }
+    ]
+  },
+  {
+    "slide": 4,
+    "texts": [],
+    "images": [
+      {
+        "filename": "slide04_img04.png",
+        "size_bytes": 144991,
+        "content_type": "image/png"
+      }
+    ]
+  },
+  {
+    "slide": 5,
+    "texts": [],
+    "images": [
+      {
+        "filename": "slide05_img05.png",
+        "size_bytes": 111399,
+        "content_type": "image/png"
+      }
+    ]
+  },
+  {
+    "slide": 6,
+    "texts": [],
+    "images": [
+      {
+        "filename": "slide06_img06.png",
+        "size_bytes": 89945,
+        "content_type": "image/png"
+      }
+    ]
+  },
+  {
+    "slide": 7,
+    "texts": [],
+    "images": [
+      {
+        "filename": "slide07_img07.png",
+        "size_bytes": 130764,
+        "content_type": "image/png"
+      }
+    ]
+  }
+]

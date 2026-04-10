@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FALCON – 日本の酪農現場のための牛群分析ソフト</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: "Noto Sans JP", "Meiryo UI", "Yu Gothic UI", sans-serif;
+      color: #1c2333; background: #ffffff; line-height: 1.7;
+    }
+    a { text-decoration: none; color: inherit; }
+    img { max-width: 100%; }
+
+    :root {
+      --navy:   #1e2a3a;
+      --navy2:  #2d3e50;
+      --accent: #2e7dcc;
+      --gold:   #c89a2e;
+      --light:  #f5f6fa;
+      --border: #dde1e7;
+      --text:   #1c2333;
+      --sub:    #6b7280;
+    }
+
+    /* ── ナビ ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: var(--navy);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 48px; height: 64px;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 1.4rem; font-weight: 700; color: #fff; letter-spacing: 0.08em;
+      line-height: 1;
+    }
+    .nav-logo img {
+      height: 36px; width: 36px; object-fit: contain; border-radius: 6px;
+      flex-shrink: 0; display: block;
+    }
+    .nav-logo .logo-text { display: flex; align-items: center; line-height: 1; }
+    .nav-logo span { color: #7ec8f4; }
+    .nav-links { display: flex; gap: 28px; align-items: center; }
+    .nav-links a {
+      color: rgba(255,255,255,0.75); font-size: 0.88rem;
+      letter-spacing: 0.04em; transition: color 0.2s;
+    }
+    .nav-links a:hover { color: #fff; }
+    .nav-cta {
+      background: var(--accent); color: #fff !important;
+      padding: 8px 20px; border-radius: 6px;
+      font-weight: 600; font-size: 0.88rem !important;
+    }
+    .nav-screens {
+      border: 1px solid rgba(255,255,255,0.3); color: #fff !important;
+      padding: 6px 16px; border-radius: 6px; font-size: 0.84rem !important;
+    }
+    .nav-screens:hover { background: rgba(255,255,255,0.1); }
+
+    /* ── ヒーロー ── */
+    #hero {
+      background: linear-gradient(135deg, var(--navy) 0%, #0d1b2a 100%);
+      color: #fff; padding: 80px 48px 64px;
+      text-align: center; position: relative; overflow: hidden;
+    }
+    #hero::before {
+      content: "";
+      position: absolute; inset: 0;
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+    }
+    .hero-logo-wrap {
+      display: flex; align-items: center; justify-content: center;
+      gap: 16px; margin-bottom: 28px;
+    }
+    .hero-logo-wrap img {
+      width: 72px; height: 72px; object-fit: contain;
+      border-radius: 16px; display: block; flex-shrink: 0;
+    }
+    .hero-logo-title {
+      font-size: 2.8rem; font-weight: 800; color: #fff;
+      letter-spacing: 0.06em; line-height: 1;
+    }
+    .hero-logo-title span { color: #7ec8f4; }
+    .hero-badge {
+      display: inline-block;
+      background: rgba(46,125,204,0.3);
+      border: 1px solid rgba(126,200,244,0.4);
+      color: #7ec8f4; font-size: 0.82rem; font-weight: 600;
+      letter-spacing: 0.08em; padding: 6px 16px; border-radius: 20px;
+      margin-bottom: 20px;
+    }
+    #hero h1 {
+      font-size: clamp(1.8rem, 4vw, 2.8rem); font-weight: 800;
+      line-height: 1.3; margin-bottom: 20px; letter-spacing: 0.02em;
+      text-shadow: 0 2px 20px rgba(0,0,0,0.9), 0 0 50px rgba(0,0,0,0.6);
+    }
+    #hero h1 em { font-style: normal; color: #7ec8f4; }
+    .hero-sub {
+      font-size: clamp(0.95rem, 2vw, 1.1rem);
+      color: rgba(255,255,255,0.82);
+      max-width: 640px; margin: 0 auto 12px;
+      text-shadow: 0 1px 12px rgba(0,0,0,0.8);
+    }
+    .hero-acronym {
+      font-size: 0.78rem; color: rgba(255,255,255,0.38);
+      letter-spacing: 0.04em; margin-bottom: 36px;
+    }
+    .hero-btns {
+      display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;
+    }
+    .btn-primary {
+      background: var(--accent); color: #fff;
+      padding: 14px 36px; border-radius: 8px;
+      font-weight: 700; font-size: 1rem; letter-spacing: 0.04em;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn-primary:hover { background: #2569ad; transform: translateY(-1px); }
+    .btn-secondary {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff; padding: 14px 36px; border-radius: 8px;
+      font-weight: 600; font-size: 1rem; transition: background 0.2s;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.18); }
+
+    /* ── ヒーロー ハヤブサ・農場 ── */
+    .hero-falcon {
+      position: absolute;
+      top: -60px;
+      left: -30px;
+      width: 650px;
+      pointer-events: none;
+      z-index: 0;
+      filter: invert(1) brightness(0.35);
+      mix-blend-mode: screen;
+      user-select: none;
+      -webkit-mask-image: linear-gradient(135deg, transparent 5%, black 42%, black 68%, transparent 100%);
+      mask-image: linear-gradient(135deg, transparent 5%, black 42%, black 68%, transparent 100%);
+    }
+    .hero-farm {
+      position: absolute;
+      bottom: -100px;
+      right: -150px;
+      width: 900px;
+      pointer-events: none;
+      z-index: 0;
+      filter: invert(1) brightness(0.30);
+      mix-blend-mode: screen;
+      user-select: none;
+      -webkit-mask-image: linear-gradient(315deg, transparent 5%, black 42%, black 68%, transparent 100%);
+      mask-image: linear-gradient(315deg, transparent 5%, black 42%, black 68%, transparent 100%);
+    }
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+    }
+    .hero-inner::before {
+      content: '';
+      position: absolute;
+      inset: -60px -80px;
+      background: radial-gradient(ellipse at center, rgba(10,20,35,0.72) 30%, transparent 75%);
+      z-index: -1;
+      pointer-events: none;
+    }
+
+    /* ── セクション共通 ── */
+    section { padding: 80px 48px; }
+    .section-label {
+      font-size: 0.78rem; font-weight: 700; letter-spacing: 0.14em;
+      color: var(--accent); text-transform: uppercase; margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      font-weight: 800; line-height: 1.3; margin-bottom: 14px;
+    }
+    .section-desc {
+      font-size: 1rem; color: var(--sub); max-width: 640px; margin-bottom: 40px;
+    }
+    .center { text-align: center; }
+    .center .section-desc { margin-left: auto; margin-right: auto; }
+
+    /* ── 課題提起 ── */
+    #pain { background: var(--light); }
+    .pain-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 24px; max-width: 1100px; margin: 0 auto;
+    }
+    .pain-card {
+      background: #fff; border: 1px solid var(--border);
+      border-radius: 12px; padding: 28px 24px;
+    }
+    .pain-card .icon { font-size: 2rem; margin-bottom: 12px; }
+    .pain-card h3 {
+      font-size: 1.05rem; font-weight: 700;
+      margin-bottom: 8px; color: var(--navy);
+    }
+    .pain-card p { font-size: 0.9rem; color: var(--sub); line-height: 1.6; }
+
+    /* ── スクリーンショット ── */
+    #screenshots { background: var(--navy); }
+    #screenshots .section-label { color: #7ec8f4; }
+    #screenshots .section-title { color: #fff; }
+    #screenshots .section-desc { color: rgba(255,255,255,0.6); }
+    .screenshots-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 28px; max-width: 1100px; margin: 0 auto 40px;
+    }
+    .app-window {
+      border-radius: 10px; overflow: hidden;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+    }
+    .win-titlebar {
+      background: #2d3748; padding: 9px 14px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .win-dot {
+      width: 11px; height: 11px; border-radius: 50%;
+    }
+    .win-dot-r { background: #ff5f57; }
+    .win-dot-y { background: #febc2e; }
+    .win-dot-g { background: #28c840; }
+    .win-title {
+      font-size: 0.72rem; color: rgba(255,255,255,0.45); margin-left: 8px;
+    }
+    .win-body img { width: 100%; display: block; }
+    .screenshot-caption {
+      padding: 16px 18px;
+      background: rgba(255,255,255,0.06);
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .screenshot-caption h3 {
+      font-size: 0.92rem; font-weight: 700; color: #fff; margin-bottom: 4px;
+    }
+    .screenshot-caption p {
+      font-size: 0.8rem; color: rgba(255,255,255,0.5); line-height: 1.5;
+    }
+    .screenshots-cta { text-align: center; }
+
+    /* ── 強み ── */
+    #strengths { background: #fff; max-width: 1200px; margin: 0 auto; }
+    .strengths-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 32px;
+    }
+    .strength-item { display: flex; flex-direction: column; gap: 12px; }
+    .strength-num {
+      width: 40px; height: 40px; border-radius: 50%;
+      background: var(--navy); color: #fff;
+      font-weight: 800; font-size: 1.1rem;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .strength-item h3 { font-size: 1.1rem; font-weight: 700; color: var(--navy); }
+    .strength-item p { font-size: 0.9rem; color: var(--sub); line-height: 1.65; }
+
+    /* ── 機能一覧 ── */
+    #features { background: var(--navy); color: #fff; }
+    #features .section-label { color: #7ec8f4; }
+    #features .section-title { color: #fff; }
+    #features .section-desc { color: rgba(255,255,255,0.6); }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px; max-width: 1100px; margin: 0 auto;
+    }
+    .feature-card {
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px; padding: 24px 22px; transition: background 0.2s;
+    }
+    .feature-card:hover { background: rgba(255,255,255,0.12); }
+    .feature-card .tag {
+      display: inline-block;
+      background: rgba(46,125,204,0.35); color: #7ec8f4;
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+      padding: 3px 10px; border-radius: 4px; margin-bottom: 12px;
+    }
+    .feature-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 8px; color: #fff; }
+    .feature-card p { font-size: 0.86rem; color: rgba(255,255,255,0.58); line-height: 1.6; }
+
+    /* ── 比較表 ── */
+    #comparison { background: var(--light); }
+    .comparison-table {
+      width: 100%; max-width: 840px; margin: 0 auto;
+      border-collapse: collapse; font-size: 0.94rem;
+    }
+    .comparison-table th {
+      padding: 14px 20px; text-align: center; font-weight: 700;
+    }
+    .comparison-table th:nth-child(1) { text-align: left; color: var(--sub); }
+    .comparison-table th:nth-child(2) {
+      background: var(--navy); color: #fff; border-radius: 8px 8px 0 0;
+    }
+    .comparison-table th:nth-child(3) { color: var(--sub); }
+    .comparison-table td { padding: 13px 20px; border-bottom: 1px solid var(--border); }
+    .comparison-table td:nth-child(1) { font-weight: 600; }
+    .comparison-table td:nth-child(2) {
+      background: rgba(30,42,58,0.04); text-align: center;
+      font-weight: 600; color: var(--navy);
+    }
+    .comparison-table td:nth-child(3) { text-align: center; color: var(--sub); }
+    .ok { color: #22a05a; }
+    .ng { color: #e05252; }
+
+    /* ── 事例 ── */
+    #casestudy { background: #fff; }
+    #casestudy > * { max-width: 1200px; }
+    .case-grid {
+      display: grid; grid-template-columns: 1fr 48px 1fr; align-items: center;
+    }
+    @media (max-width: 680px) {
+      .case-grid { grid-template-columns: 1fr; gap: 12px; }
+      .case-arrow { display: none; }
+    }
+
+    /* ── 開発者 ── */
+    #developer { background: var(--light); }
+    .dev-inner {
+      max-width: 860px; margin: 0 auto;
+      display: grid; grid-template-columns: 220px 1fr;
+      gap: 48px; align-items: start;
+    }
+    .dev-profile {
+      background: #fff; border-radius: 16px;
+      padding: 28px 20px; text-align: center;
+      border: 1px solid var(--border);
+    }
+    .dev-avatar {
+      width: 96px; height: 96px;
+      background: var(--navy); border-radius: 50%;
+      margin: 0 auto 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2.4rem; color: #fff;
+    }
+    .dev-name { font-size: 1.15rem; font-weight: 800; color: var(--navy); margin-bottom: 4px; }
+    .dev-org { font-size: 0.84rem; color: var(--sub); line-height: 1.6; }
+    .dev-awards { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; }
+    .award-badge {
+      background: var(--gold); color: #fff;
+      font-size: 0.72rem; font-weight: 700;
+      padding: 4px 10px; border-radius: 20px; letter-spacing: 0.02em;
+    }
+    .dev-bio h3 {
+      font-size: 1.5rem; font-weight: 800;
+      color: var(--navy); margin-bottom: 16px;
+    }
+    .dev-bio p {
+      font-size: 0.95rem; color: #3d4a5c;
+      line-height: 1.8; margin-bottom: 16px;
+    }
+    .pub-list {
+      list-style: none; margin-top: 20px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .pub-list li {
+      display: flex; gap: 12px; align-items: flex-start;
+      font-size: 0.88rem; color: var(--sub); line-height: 1.5;
+    }
+    .pub-list li::before { content: "▸"; color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+    .pub-year { font-weight: 700; color: var(--navy); white-space: nowrap; }
+
+    /* ── 料金 ── */
+    #pricing { background: #fff; }
+    .pricing-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 24px; max-width: 1000px; margin: 0 auto;
+    }
+    .price-card {
+      background: var(--light); border: 2px solid var(--border);
+      border-radius: 16px; padding: 32px 28px; position: relative;
+    }
+    .price-card.featured { border-color: var(--navy); box-shadow: 0 8px 32px rgba(30,42,58,0.12); background: #fff; }
+    .price-badge {
+      position: absolute; top: -13px; left: 50%; transform: translateX(-50%);
+      background: var(--navy); color: #fff;
+      font-size: 0.72rem; font-weight: 700; padding: 4px 14px;
+      border-radius: 20px; white-space: nowrap; letter-spacing: 0.04em;
+    }
+    .price-type { font-size: 0.82rem; font-weight: 700; letter-spacing: 0.08em; color: var(--sub); margin-bottom: 8px; }
+    .price-main { font-size: 2rem; font-weight: 800; color: var(--navy); line-height: 1; margin-bottom: 4px; }
+    .price-unit { font-size: 0.82rem; color: var(--sub); margin-bottom: 20px; }
+    .price-note { font-size: 0.82rem; color: var(--sub); margin-bottom: 20px; font-style: italic; }
+    .price-features {
+      list-style: none; display: flex; flex-direction: column;
+      gap: 8px; font-size: 0.88rem; color: #3d4a5c;
+    }
+    .price-features li::before { content: "✓ "; color: #22a05a; font-weight: 700; }
+    .trial-note {
+      text-align: center; margin-top: 32px;
+      font-size: 0.9rem; color: var(--sub);
+    }
+    .trial-note strong { color: var(--navy); }
+
+    /* ── フォーム ── */
+    #cta {
+      background: linear-gradient(135deg, var(--navy) 0%, #0d1b2a 100%);
+      color: #fff; text-align: center; padding: 80px 48px;
+    }
+    #cta h2 { font-size: clamp(1.6rem, 3vw, 2.4rem); font-weight: 800; margin-bottom: 16px; }
+    #cta > p { color: rgba(255,255,255,0.65); margin-bottom: 40px; font-size: 1rem; }
+    .form-wrap {
+      max-width: 560px; margin: 0 auto;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label { font-size: 0.84rem; font-weight: 600; color: rgba(255,255,255,0.75); }
+    .form-group input, .form-group select, .form-group textarea {
+      background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px; color: white; padding: 11px 14px;
+      font-size: 0.92rem; font-family: inherit; outline: none; transition: border 0.2s;
+    }
+    .form-group input::placeholder, .form-group textarea::placeholder { color: rgba(255,255,255,0.35); }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #7ec8f4; }
+    .form-group select option { background: #1e2a3a; color: white; }
+    .form-group textarea { resize: vertical; min-height: 100px; }
+    .form-note { font-size: 0.8rem; color: rgba(255,255,255,0.4); text-align: center; }
+
+    /* ── フッター ── */
+    footer {
+      background: #0d1b2a; color: rgba(255,255,255,0.45);
+      text-align: center; padding: 32px 48px;
+      font-size: 0.82rem; line-height: 1.8;
+    }
+    footer strong { color: rgba(255,255,255,0.75); }
+
+    /* ── レスポンシブ ── */
+    @media (max-width: 768px) {
+      nav { padding: 0 20px; }
+      .nav-links { display: none; }
+      section { padding: 56px 20px; }
+      #hero { padding: 56px 20px 48px; }
+      .dev-inner { grid-template-columns: 1fr; }
+      .comparison-table { font-size: 0.82rem; }
+      .comparison-table th, .comparison-table td { padding: 10px 12px; }
+      .hero-logo-title { font-size: 2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ナビゲーション -->
+<nav>
+  <div class="nav-logo">
+    <img src="assets/logo.png" alt="FALCON">
+    <span class="logo-text">FAL<span>CON</span></span>
+  </div>
+  <div class="nav-links">
+    <a href="#pain">課題</a>
+    <a href="#screenshots">画面紹介</a>
+    <a href="#strengths">強み</a>
+    <a href="#features">機能</a>
+    <a href="#developer">開発者</a>
+    <a href="#pricing">料金</a>
+    <a href="screenshots.html" class="nav-screens">📷 全画面を見る</a>
+    <a href="#cta" class="nav-cta">お問い合わせ</a>
+  </div>
+</nav>
+
+
+<!-- ヒーロー -->
+<section id="hero">
+  <img class="hero-falcon" src="../reference/Gemini_Generated_Image_5d1ka15d1ka15d1k.png" alt="" aria-hidden="true">
+  <img class="hero-farm" src="../reference/Gemini_Generated_Image_farm.png" alt="" aria-hidden="true">
+  <div class="hero-inner">
+    <div class="hero-logo-wrap">
+      <img src="assets/logo.png" alt="FALCON">
+      <div class="hero-logo-title">FAL<span>CON</span></div>
+    </div>
+    <div class="hero-badge">日本の酪農現場のために</div>
+    <h1>
+      日本語で使える、<br>
+      <em>本格的な牛群分析</em>が<br>
+      ついに手の届く場所に。
+    </h1>
+    <p class="hero-sub">
+      FALCON は、海外牛群管理ソフトに匹敵する分析力を持ちながら、<br>
+      完全日本語・直感操作で現場の獣医師を強力にサポートします。
+    </p>
+    <p class="hero-acronym">
+      Farm Analysis for Lactating Cattle Optimization (Nippon Model)
+    </p>
+  </div>
+</section>
+
+
+<!-- 課題提起 -->
+<section id="pain">
+  <div class="center">
+    <p class="section-label">Problem</p>
+    <h2 class="section-title">「分析したいのに、できない」<br>その壁を取り除きます</h2>
+    <p class="section-desc">
+      海外牛群管理ソフトは分析力に優れていますが、<br>
+      日本の現場には大きな3つの障壁がありました。
+    </p>
+  </div>
+  <div class="pain-grid">
+    <div class="pain-card">
+      <div class="icon">🌐</div>
+      <h3>英語 ＋ コマンド操作</h3>
+      <p>
+        海外製牛群管理ソフトはすべての操作がコマンドライン入力。英語の専門用語を習得しなければ
+        基本的な集計すらできず、現場の獣医師には敷居が高すぎました。
+      </p>
+    </div>
+    <div class="pain-card">
+      <div class="icon">💰</div>
+      <h3>高額な導入コスト</h3>
+      <p>
+        海外製ソフトは本体費用に加えて保守・サポート費用も高額。
+        個人で担当農場に導入を勧めるには、費用面での説明が難しい状況でした。
+      </p>
+    </div>
+    <div class="pain-card">
+      <div class="icon">📊</div>
+      <h3>分析結果の農場還元</h3>
+      <p>
+        深い分析ができても、結果をわかりやすく農家に伝えるには
+        別途レポート作成の手間がかかります。多忙な現場では後回しになりがちでした。
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<!-- スクリーンショット（抜粋） -->
+<section id="screenshots">
+  <div class="center">
+    <p class="section-label">Screenshots</p>
+    <h2 class="section-title">実際の画面をご覧ください</h2>
+    <p class="section-desc">
+      百聞は一見に如かず。現場で動いているFALCONの画面です。
+    </p>
+  </div>
+
+  <div class="screenshots-grid">
+
+    <div>
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — ダッシュボード</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide06_img06.png" alt="ダッシュボード画面">
+        </div>
+      </div>
+      <div class="screenshot-caption">
+        <h3>ダッシュボード</h3>
+        <p>経産牛頭数・21日妊娠率・平均受胎率・平均乳量などの主要KPIを自動集計。訪問前に農場状況を一目で把握できます。</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 妊娠率（21日サイクル）</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide01_img01.png" alt="妊娠率21日サイクル画面">
+        </div>
+      </div>
+      <div class="screenshot-caption">
+        <h3>21日妊娠率（サイクル別）</h3>
+        <p>世界標準のロジックで18サイクル分の妊娠率・授精率・受胎率を自動集計。問題のあるサイクルを即座に特定できます。</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="app-window">
+        <div class="win-titlebar">
+          <span class="win-dot win-dot-r"></span>
+          <span class="win-dot win-dot-y"></span>
+          <span class="win-dot win-dot-g"></span>
+          <span class="win-title">FALCON — 繁殖検診レポート</span>
+        </div>
+        <div class="win-body">
+          <img src="img/slide05_img05.png" alt="繁殖検診レポート画面">
+        </div>
+      </div>
+      <div class="screenshot-caption">
+        <h3>繁殖検診レポート</h3>
+        <p>累積妊娠頭数グラフ・繁殖指標一覧・ドーナツチャートを自動生成。農家への説明資料がそのまま出来上がります。</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="screenshots-cta">
+    <a href="screenshots.html" class="btn-secondary">
+      すべての画面を見る（全8画面）→
+    </a>
+  </div>
+</section>
+
+
+<!-- 強み -->
+<section id="strengths">
+  <div>
+    <p class="section-label">Solution</p>
+    <h2 class="section-title">FALCON が選ばれる4つの理由</h2>
+    <p class="section-desc">
+      現場の獣医師が設計したから、現場で本当に使えます。
+    </p>
+  </div>
+  <div class="strengths-grid">
+    <div class="strength-item">
+      <div class="strength-num">1</div>
+      <h3>完全日本語 ＋ GUI操作</h3>
+      <p>
+        コマンド不要。すべての操作をマウスで完結できます。
+        乳検データ・ゲノムレポートの取り込みも数クリック。
+        初めての獣医師でも、導入当日から使えます。
+      </p>
+    </div>
+    <div class="strength-item">
+      <div class="strength-num">2</div>
+      <h3>世界標準の分析エンジン</h3>
+      <p>
+        21日妊娠率（21-day Pregnancy Rate）をはじめ、
+        海外牛群管理ソフトと同等のロジックで繁殖成績を正確に算出。
+        世界標準指標で農場をベンチマーク評価できます。
+      </p>
+    </div>
+    <div class="strength-item">
+      <div class="strength-num">3</div>
+      <h3>ダッシュボードによる自動分析</h3>
+      <p>
+        繁殖・分娩・乳量・ゲノムの主要指標をダッシュボードに自動集計。
+        複雑な分析が得意でない獣医師でも、訪問前に農場の状態を
+        一目で把握し、一定水準以上の情報を農家に還元できます。
+      </p>
+    </div>
+    <div class="strength-item">
+      <div class="strength-num">4</div>
+      <h3>臨床獣医師の知見を凝縮</h3>
+      <p>
+        牛群管理から個体診療まで携わる臨床獣医師が、
+        日々の問題意識と実践経験から「現場に何が必要か・何を還元すべきか」を考え抜いて開発しました。
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<!-- 機能一覧 -->
+<section id="features">
+  <div class="center">
+    <p class="section-label">Features</p>
+    <h2 class="section-title">主な機能</h2>
+    <p class="section-desc">
+      繁殖から乳質・ゲノムまで、酪農経営に必要な分析を網羅します。
+    </p>
+  </div>
+  <div class="features-grid">
+    <div class="feature-card">
+      <span class="tag">繁殖管理</span>
+      <h3>21日妊娠率（21-day PR）</h3>
+      <p>世界標準ロジックで繁殖成績を算出。サイクルごと・DIMごとの推移グラフで問題サイクルを即座に特定。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">繁殖管理</span>
+      <h3>繁殖検診サポート</h3>
+      <p>検診結果の入力・集計から、受胎率・妊娠率・空胎日数の追跡まで一元管理。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">個体管理</span>
+      <h3>個体カード</h3>
+      <p>1頭ごとの繁殖・分娩・治療・乳量・ゲノム情報を時系列で可視化。過去のイベントも即検索。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">アラート</span>
+      <h3>長期空胎・分娩超過チェック</h3>
+      <p>300日超空胎牛・分娩予定15日超過牛を自動抽出。見落としをゼロに。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">データ連携</span>
+      <h3>乳検・ゲノムデータ取込</h3>
+      <p>DHI乳検データ・ゲノム評価レポートをワンクリックで取り込み。既存データを無駄にしません。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">データ連携</span>
+      <h3>既存データ移行対応</h3>
+      <p>海外牛群管理ソフト形式のデータをFALCONに取り込み可能。既存ユーザーも乗り換えできます。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">ダッシュボード</span>
+      <h3>農場サマリー自動生成</h3>
+      <p>訪問前にダッシュボードを確認するだけで、その日の農場状況を把握。農家への説明資料も自動作成。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">複数農場</span>
+      <h3>マルチファーム対応</h3>
+      <p>担当農場を1台のPCで管理。農場間の切り替えも瞬時に。担当が増えても追加費用なし。</p>
+    </div>
+    <div class="feature-card">
+      <span class="tag">オフライン</span>
+      <h3>インターネット不要</h3>
+      <p>農場でのネット環境に依存せず動作。データはローカルに保存されるため、通信のない牛舎でも安心。</p>
+    </div>
+  </div>
+</section>
+
+
+<!-- 比較表 -->
+<section id="comparison">
+  <div class="center">
+    <p class="section-label">Comparison</p>
+    <h2 class="section-title">従来型ソフトとの比較</h2>
+    <p class="section-desc">
+      海外製コマンドライン型牛群管理ソフトと比べた、FALCONの優位点。
+    </p>
+  </div>
+  <table class="comparison-table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>FALCON</th>
+        <th>海外製コマンド型ソフト</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>操作言語</td>
+        <td><span class="ok">✓</span> 完全日本語</td>
+        <td><span class="ng">✗</span> 英語のみ</td>
+      </tr>
+      <tr>
+        <td>操作方法</td>
+        <td><span class="ok">✓</span> GUI（マウス操作）</td>
+        <td><span class="ng">✗</span> コマンドライン</td>
+      </tr>
+      <tr>
+        <td>21日妊娠率算出</td>
+        <td><span class="ok">✓</span> 世界標準互換ロジック</td>
+        <td><span class="ok">✓</span> 標準機能</td>
+      </tr>
+      <tr>
+        <td>乳検データ連携</td>
+        <td><span class="ok">✓</span> 対応</td>
+        <td><span class="ok">✓</span> 対応</td>
+      </tr>
+      <tr>
+        <td>ゲノムデータ連携</td>
+        <td><span class="ok">✓</span> 対応</td>
+        <td>△ 限定的</td>
+      </tr>
+      <tr>
+        <td>ダッシュボード自動生成</td>
+        <td><span class="ok">✓</span> 自動</td>
+        <td><span class="ng">✗</span> コマンド入力要</td>
+      </tr>
+      <tr>
+        <td>導入コスト</td>
+        <td><span class="ok">✓</span> 国内価格・年額制</td>
+        <td><span class="ng">✗</span> 高額・外貨建て</td>
+      </tr>
+      <tr>
+        <td>オフライン動作</td>
+        <td><span class="ok">✓</span> 完全オフライン</td>
+        <td><span class="ok">✓</span> 可</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+
+<!-- 事例 -->
+<section id="casestudy">
+  <div class="center">
+    <p class="section-label">Case Study</p>
+    <h2 class="section-title">データ分析が、農場を変える。</h2>
+    <p class="section-desc">
+      データ分析と定期繁殖検診が、農場の繁殖成績・経営成績を大きく改善させた実例です。
+    </p>
+  </div>
+
+  <div style="max-width:860px; margin:0 auto;">
+
+    <!-- 事例ヘッダー -->
+    <div style="background:var(--light); border-left:4px solid var(--accent); border-radius:0 12px 12px 0; padding:24px 32px; margin-bottom:28px;">
+      <p style="font-size:0.8rem; font-weight:700; letter-spacing:0.1em; color:var(--accent); margin-bottom:10px;">CASE REPORT — 北獣会誌 64巻（2020年）</p>
+      <h3 style="font-size:1.2rem; font-weight:800; color:var(--navy); margin-bottom:10px;">
+        「定期繁殖検診を契機に生産性が向上した酪農場の1例」
+      </h3>
+      <p style="display:inline-block; font-size:0.78rem; font-weight:700; color:#fff; background:var(--accent); border-radius:4px; padding:3px 10px; margin-bottom:14px;">🏆 北海道獣医師会長賞 受賞</p>
+      <p style="font-size:0.92rem; color:#3d4a5c; line-height:1.8;">
+        オホーツク管内の酪農場（経産牛49頭・つなぎ飼い・夫婦2人経営）。
+        繁殖成績の低迷により経営上の課題を抱えていたが、
+        2017年4月より獣医師担当制の定期繁殖検診を開始し、
+        繁殖管理ソフトによるデータ分析で問題を特定。農場主自身の改善能力を引き出すアプローチで、
+        繁殖成績だけでなく<strong>乳量・乳質まで大幅に改善</strong>させた。
+      </p>
+    </div>
+
+    <!-- Before / After 指標比較 -->
+    <div style="display:grid; grid-template-columns:1fr 48px 1fr; gap:0; margin-bottom:24px; align-items:center;">
+
+      <div style="background:var(--light); border-radius:12px; padding:22px 20px;">
+        <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.06em; color:#e05252; text-align:center; margin-bottom:14px;">
+          ▼ 繁殖検診開始時（2017年4月）
+        </div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">発情発見率</span>
+            <strong style="font-size:1.15rem; color:#e05252;">34%</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">受胎率</span>
+            <strong style="font-size:1.15rem; color:#e05252;">29%</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">妊娠率（21日PR）</span>
+            <strong style="font-size:1.3rem; color:#e05252;">11%</strong>
+          </div>
+          <div style="border-top:1px solid var(--border); margin:4px 0;"></div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">管理乳量</span>
+            <strong style="color:#e05252;">24.4 kg/日</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">年間乳量/頭</span>
+            <strong style="color:#e05252;">7,367 kg</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">体細胞 リニアスコア</span>
+            <strong style="color:#e05252;">4.2</strong>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center; font-size:2rem; color:var(--accent); line-height:1;">→</div>
+
+      <div style="background:#f0faf4; border:1.5px solid #22a05a; border-radius:12px; padding:22px 20px;">
+        <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.06em; color:#22a05a; text-align:center; margin-bottom:14px;">
+          ▲ 約2年8ヶ月後（2019年12月）
+        </div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">発情発見率</span>
+            <strong style="font-size:1.15rem; color:#22a05a;">60% <span style="font-size:0.72rem; font-weight:500; opacity:0.8;">+26pt</span></strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">受胎率</span>
+            <strong style="font-size:1.15rem; color:#22a05a;">34% <span style="font-size:0.72rem; font-weight:500; opacity:0.8;">+5pt</span></strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">妊娠率（21日PR）</span>
+            <strong style="font-size:1.3rem; color:#22a05a;">18% <span style="font-size:0.72rem; font-weight:500; opacity:0.8;">+7pt</span></strong>
+          </div>
+          <div style="border-top:1px solid #b6e4c7; margin:4px 0;"></div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">管理乳量</span>
+            <strong style="color:#22a05a;">36.3 kg/日 <span style="font-size:0.72rem; font-weight:500; opacity:0.8;">+49%</span></strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">年間乳量/頭</span>
+            <strong style="color:#22a05a;">10,855 kg <span style="font-size:0.72rem; font-weight:500; opacity:0.8;">+47%</span></strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.86rem;">
+            <span style="color:var(--sub);">体細胞 リニアスコア</span>
+            <strong style="color:#22a05a;">2.8 <span style="font-size:0.72rem; font-weight:500; opacity:0.8;">大幅改善</span></strong>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 分析がもたらした洞察 -->
+    <div style="background:var(--navy); border-radius:12px; padding:24px 28px; margin-bottom:20px; color:#fff;">
+      <p style="font-size:0.78rem; font-weight:700; letter-spacing:0.08em; color:#7ec8f4; margin-bottom:10px;">▸ データ分析が明らかにした根本原因と打ち手</p>
+      <p style="font-size:0.92rem; line-height:1.85; color:rgba(255,255,255,0.85);">
+        繁殖管理ソフトで全指標を分析した結果、最大の問題は<strong style="color:#7ec8f4;">発情発見率の低さ（34%）</strong>と判明。
+        ホルモン剤による定時授精プログラムへの過度な依存を断ち、<strong style="color:#7ec8f4;">自然発情発見の向上</strong>と
+        <strong style="color:#7ec8f4;">カウコンフォートの改善</strong>を重点的に指導。
+        定期検診ごとに妊娠率・発情発見率・受胎率をフィードバックし続けることで、
+        農場主が自ら課題を認識し改善するサイクルが生まれた。
+        大きな施設投資をすることなく、繁殖成績の改善が乳量・乳質の向上へと連鎖した。
+      </p>
+    </div>
+
+    <p style="font-size:0.84rem; color:var(--sub); line-height:1.7; padding-left:14px; border-left:3px solid var(--border);">
+      大脇茂雄「定期繁殖検診を契機に生産性が向上した酪農場の1例」<em>北獣会誌</em> 64, 241–244（2020）<br>
+      <span style="color:var(--accent);">──このような繁殖成績の可視化・問題特定・継続的フィードバックの仕組みを、
+      誰でも使えるようにしたものがFALCONです。</span>
+    </p>
+  </div>
+</section>
+
+
+<!-- 開発者 -->
+<section id="developer">
+  <div class="dev-inner">
+    <div>
+      <div class="dev-profile">
+        <div class="dev-avatar">🐄</div>
+        <div class="dev-name">大脇 茂雄</div>
+        <div class="dev-org">
+          獣医師<br>
+          牛群管理から個体診療まで携わる<br>
+          臨床獣医師
+        </div>
+        <div class="dev-awards">
+          <span class="award-badge" style="background:#b8860b; font-size:0.75rem;">🥇 日本獣医師会 獣医学術賞 2010</span>
+          <span class="award-badge">🏆 北海道地区学会賞 2010</span>
+          <span class="award-badge">🏅 農林水産省経営局長賞 2008</span>
+          <span class="award-badge">🏆 北海道獣医師会誌 優秀論文賞 2015</span>
+          <span class="award-badge">🏆 北海道地区学会長賞 2023</span>
+        </div>
+      </div>
+    </div>
+    <div class="dev-bio">
+      <h3>現場の獣医師が、<br>現場のために作った。</h3>
+      <p>
+        FALCONは、牛群管理から個体診療まで携わる臨床獣医師・大脇茂雄が、
+        20年以上の酪農臨床経験を通じて開発した牛群管理ソフトです。
+      </p>
+      <p>
+        個体診療の症例報告から繁殖管理・周産期管理の分析研究、蹄病や乳質の改善研究まで、多分野にわたる研究実績を持ち、
+        2010年には牛出血性腸症候群の病理学的研究で
+        <strong>日本獣医師会獣医学術賞（産業動物部門・全国大会）</strong>を受賞。
+        同研究は2015年に英文論文として <em>Journal of Veterinary Medical Science</em>（77巻7号）にも掲載されています。
+        農林水産省経営局長賞（2008年）を獲得し、
+        北海道獣医師会誌 優秀論文賞（2015年）、
+        産業動物獣医学会北海道地区学会長賞（2023年）と
+        地域から全国まで一貫して評価されてきた実績を持ちます。
+        2023年には海外牛群管理ソフトの解説論文を
+        <em>家畜診療</em>誌に発表するなど、
+        日本の酪農現場への知識普及にも積極的に取り組んでいます。
+      </p>
+      <p>
+        「世界水準の牛群分析を、日本の現場で働くすべての獣医師が
+        使えるようにしたい」──その思いがFALCON開発の出発点です。
+      </p>
+
+      <ul class="pub-list">
+        <li>
+          <span class="pub-year">2023</span>
+          「海外製牛群管理ソフトの特徴と基本的な使い方」<em>家畜診療</em> 70(12)
+        </li>
+        <li>
+          <span class="pub-year">2010</span>
+          「牛出血性腸症候群（HBS）の病理学的検索とその考察」<em>日本獣医師会誌</em>
+          <span style="background:#b8860b; color:#fff; font-size:0.68rem; padding:2px 7px; border-radius:10px; margin-left:4px; font-weight:700;">日本獣医師会 獣医学術賞</span>
+          <span style="background:#c89a2e; color:#fff; font-size:0.68rem; padding:2px 7px; border-radius:10px; margin-left:4px; font-weight:700;">北海道地区学会賞</span>
+        </li>
+        <li>
+          <span class="pub-year">2023</span>
+          「ホルスタイン乳牛の十二指腸S状曲部変位による腸閉塞4例」<em>北海道獣医師会雑誌</em> 67巻
+          <span style="background:#c89a2e; color:#fff; font-size:0.68rem; padding:2px 7px; border-radius:10px; margin-left:4px; font-weight:700;">北海道地区学会長賞</span>
+        </li>
+        <li>
+          <span class="pub-year">2020</span>
+          「定期繁殖検診を契機に生産性が向上した酪農場の1例」<em>北海道獣医師会雑誌</em> 64巻
+        </li>
+        <li>
+          <span class="pub-year">2018</span>
+          「フレッシュチェック時の血中BHBAと分娩後60日までの排卵との関連性」<em>北海道獣医師会雑誌</em>
+        </li>
+        <li>
+          <span class="pub-year">2015</span>
+          「妊娠率に着目し繁殖問題を解決した農場の1例」<em>北海道獣医師会雑誌</em> 59巻
+          <span style="background:#c89a2e; color:#fff; font-size:0.68rem; padding:2px 7px; border-radius:10px; margin-left:4px; font-weight:700;">優秀論文賞</span>
+        </li>
+        <li>
+          <span class="pub-year">2015</span>
+          "Pathological findings of hemorrhagic bowel syndrome (HBS) in six dairy cattle cases"
+          <em>J. Vet. Med. Sci.</em> 77(7): 879–881
+          <span style="background:#2563eb; color:#fff; font-size:0.68rem; padding:2px 7px; border-radius:10px; margin-left:4px; font-weight:700;">English</span>
+        </li>
+        <li>
+          <span class="pub-year">2013</span>
+          「牛から発せられる情報を参考にしたストール改造の効果と検証」<em>酪農ジャーナル</em>
+        </li>
+        <li>
+          <span class="pub-year">2012</span>
+          「タイストール牛舎におけるStall Standing Index」<em>日本獣医師会雑誌</em>
+        </li>
+        <li>
+          <span class="pub-year">2008</span>
+          「農林水産省経営局長賞 ─ 一農場における蹄病対策とその効果」<em>家畜診療</em>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+
+<!-- 料金 -->
+<section id="pricing">
+  <div class="center">
+    <p class="section-label">Pricing</p>
+    <h2 class="section-title">シンプルな端末課金制</h2>
+    <p class="section-desc">
+      1台のPCで担当農場を何件でも管理できます。農場が増えても追加費用はかかりません。
+    </p>
+  </div>
+  <div class="pricing-grid">
+    <div class="price-card">
+      <div class="price-type">勤務獣医師・関連機関</div>
+      <div class="price-main">ご相談</div>
+      <div class="price-unit">年額 / 1端末</div>
+      <p class="price-note">所属先・関連機関の方は<br>お気軽にご相談ください</p>
+      <ul class="price-features">
+        <li>全機能利用可</li>
+        <li>農場数 無制限</li>
+        <li>メール・LINEサポート</li>
+        <li>アップデート無料</li>
+      </ul>
+    </div>
+    <div class="price-card featured">
+      <div class="price-badge">主要プラン</div>
+      <div class="price-type">開業獣医師</div>
+      <div class="price-main">ご相談</div>
+      <div class="price-unit">年額 / 1端末</div>
+      <p class="price-note">担当農場数・利用状況に応じて<br>最適な条件をご提案します</p>
+      <ul class="price-features">
+        <li>全機能利用可</li>
+        <li>農場数 無制限</li>
+        <li>メール・LINEサポート</li>
+        <li>アップデート無料</li>
+      </ul>
+    </div>
+    <div class="price-card">
+      <div class="price-type">JA・乳検等 関連団体</div>
+      <div class="price-main">ご相談</div>
+      <div class="price-unit">年額 / 1端末</div>
+      <p class="price-note">複数端末での導入も<br>対応いたします</p>
+      <ul class="price-features">
+        <li>全機能利用可</li>
+        <li>農場数 無制限</li>
+        <li>メール・LINEサポート</li>
+        <li>アップデート無料</li>
+      </ul>
+    </div>
+  </div>
+  <p class="trial-note">
+    まずは <strong>30日間の無料トライアル</strong> をお試しください。<br>
+    クレジットカード不要・インストールするだけで即日利用開始できます。
+  </p>
+</section>
+
+
+<!-- CTA + フォーム -->
+<section id="cta">
+  <h2>まず、使ってみてください。</h2>
+  <p>
+    30日間の無料トライアルで、FALCONが現場にフィットするかを<br>
+    実際の担当農場データで確かめていただけます。
+  </p>
+
+  <form class="form-wrap" action="https://formspree.io/f/XXXXXXXX" method="POST">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="name">お名前 <span style="color:#f87171">*</span></label>
+        <input type="text" id="name" name="name" placeholder="山田 太郎" required>
+      </div>
+      <div class="form-group">
+        <label for="org">所属・組織名</label>
+        <input type="text" id="org" name="org" placeholder="例: ○○獣医師事務所">
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="email">メールアドレス <span style="color:#f87171">*</span></label>
+      <input type="email" id="email" name="email" placeholder="example@email.com" required>
+    </div>
+    <div class="form-group">
+      <label for="type">お問い合わせ種別</label>
+      <select id="type" name="type">
+        <option value="">選択してください</option>
+        <option value="trial">30日間 無料トライアル申込</option>
+        <option value="pricing">料金・ライセンスについて</option>
+        <option value="feature">機能・操作について</option>
+        <option value="other">その他</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="message">メッセージ（任意）</label>
+      <textarea id="message" name="message" placeholder="担当農場数、現在使用中のソフトなど、お気軽にご記入ください。"></textarea>
+    </div>
+    <button type="submit" class="btn-primary" style="cursor:pointer; border:none; font-size:1rem; width:100%; padding:14px;">
+      送信する
+    </button>
+    <p class="form-note">
+      通常2営業日以内にご返信いたします。<br>
+      お急ぎの場合は <a href="mailto:shigeo.o.dvm@gmail.com" style="color:rgba(255,255,255,0.6)">shigeo.o.dvm@gmail.com</a> まで直接ご連絡ください。
+    </p>
+  </form>
+</section>
+
+
+<!-- フッター -->
+<footer>
+  <p>
+    <strong>FALCON</strong> — Farm Analysis for Lactating Cattle Optimization (Nippon Model)<br>
+    開発: 大脇 茂雄（臨床獣医師）<br>
+    お問い合わせ: <a href="mailto:shigeo.o.dvm@gmail.com" style="color:rgba(255,255,255,0.6)">shigeo.o.dvm@gmail.com</a>
+  </p>
+  <p style="margin-top:8px;">
+    <a href="screenshots.html" style="color:rgba(255,255,255,0.5)">画面紹介</a>
+  </p>
+  <p style="margin-top:12px;">© 2026 FALCON. All rights reserved.</p>
+</footer>
+
+</body>
+</html>
