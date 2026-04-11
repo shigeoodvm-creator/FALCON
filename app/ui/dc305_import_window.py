@@ -72,16 +72,35 @@ def _normalize_date_cell(raw: Any, default_year: Optional[int] = None) -> Option
     except (ValueError, TypeError):
         pass
     year = default_year or datetime.now().year
+    # 年が先頭のフォーマット
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"):
         try:
             dt = datetime.strptime(s[:10], fmt[:10])
             return dt.strftime("%Y-%m-%d")
         except (ValueError, TypeError):
             continue
+    # 年が先頭の正規表現 (YYYY-MM-DD / YYYY/MM/DD)
     m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
     if m:
         try:
             y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+        except (ValueError, TypeError):
+            pass
+    # DC305形式: M/D/YYYY または MM/DD/YYYY（年が末尾）
+    m2 = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m2:
+        try:
+            mo, d, y = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+        except (ValueError, TypeError):
+            pass
+    # M/D/YY（2桁年）
+    m3 = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2})$", s)
+    if m3:
+        try:
+            mo, d, y = int(m3.group(1)), int(m3.group(2)), int(m3.group(3))
+            y += 2000 if y < 50 else 1900
             return f"{y:04d}-{mo:02d}-{d:02d}"
         except (ValueError, TypeError):
             pass
@@ -183,7 +202,7 @@ class DC305ImportWindow:
         main_frame = ttk.Frame(self.window, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        file_frame = ttk.LabelFrame(main_frame, text="Excelファイル（DC305形式）", padding=10)
+        file_frame = ttk.LabelFrame(main_frame, text="ファイル選択（DC305形式 Excel / CSV）", padding=10)
         file_frame.pack(fill=tk.X, pady=(0, 10))
         self.file_path_var = tk.StringVar()
         ttk.Entry(file_frame, textvariable=self.file_path_var, width=72, state="readonly").pack(
@@ -221,7 +240,7 @@ class DC305ImportWindow:
 
         info_frame = ttk.Frame(main_frame)
         info_frame.pack(fill=tk.X, pady=(0, 10))
-        self.info_label = ttk.Label(info_frame, text="DC305形式のExcel（列A=ID, B=イベント名, D=日付）を選択してください")
+        self.info_label = ttk.Label(info_frame, text="DC305形式の Excel / CSV（列A=ID, B=イベント名, D=日付）を選択してください")
         self.info_label.pack(side=tk.LEFT)
 
         btn_frame = ttk.Frame(main_frame)
@@ -231,9 +250,11 @@ class DC305ImportWindow:
 
     def _select_file(self):
         path = filedialog.askopenfilename(
-            title="DC305形式Excelを選択",
+            title="DC305形式ファイルを選択（Excel / CSV）",
             filetypes=[
+                ("Excel / CSV", "*.xlsx;*.xls;*.csv"),
                 ("Excel", "*.xlsx;*.xls"),
+                ("CSV", "*.csv"),
                 ("すべて", "*.*"),
             ],
         )
@@ -249,16 +270,36 @@ class DC305ImportWindow:
         try:
             import pandas as pd
         except ImportError:
-            messagebox.showerror("エラー", "Excel を読むには pandas が必要です")
+            messagebox.showerror("エラー", "ファイルを読むには pandas が必要です")
             return
-        try:
-            df = pd.read_excel(self.file_path, header=0, sheet_name=0)
-        except Exception as e:
-            try:
-                df = pd.read_excel(self.file_path, header=0, sheet_name=0, engine="openpyxl")
-            except Exception as e2:
-                messagebox.showerror("エラー", f"Excel の読み込みに失敗しました:\n{e2}")
+
+        ext = self.file_path.suffix.lower()
+        df = None
+
+        if ext == ".csv":
+            # CSV読み込み：エンコーディングを順に試みる
+            for enc in ("utf-8-sig", "shift-jis", "cp932", "utf-8", "latin-1"):
+                try:
+                    df = pd.read_csv(self.file_path, header=0, encoding=enc, dtype=str)
+                    break
+                except UnicodeDecodeError:
+                    continue
+                except Exception as e:
+                    messagebox.showerror("エラー", f"CSVの読み込みに失敗しました:\n{e}")
+                    return
+            if df is None:
+                messagebox.showerror("エラー", "CSVのエンコーディングを判定できませんでした")
                 return
+        else:
+            # Excel読み込み
+            try:
+                df = pd.read_excel(self.file_path, header=0, sheet_name=0)
+            except Exception:
+                try:
+                    df = pd.read_excel(self.file_path, header=0, sheet_name=0, engine="openpyxl")
+                except Exception as e2:
+                    messagebox.showerror("エラー", f"Excelの読み込みに失敗しました:\n{e2}")
+                    return
         if df is None or df.empty:
             self.parsed_rows = []
             self._update_preview()

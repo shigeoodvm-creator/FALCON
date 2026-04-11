@@ -18,7 +18,7 @@ from modules.event_display import format_insemination_event, format_calving_even
 from modules.app_settings_manager import get_app_settings_manager
 from ui.event_input import EventInputWindow
 from settings_manager import SettingsManager
-from constants import FARMS_ROOT
+from constants import FARMS_ROOT, APP_CONFIG_DIR
 
 # EventDetailWindow は後で実装（今はダミー）
 try:
@@ -39,7 +39,9 @@ class CowCard:
                  formula_engine: FormulaEngine,
                  rule_engine: Optional[RuleEngine] = None,
                  event_dictionary_path: Optional[Path] = None,
-                 item_dictionary_path: Optional[Path] = None):
+                 item_dictionary_path: Optional[Path] = None,
+                 show_event_history: bool = True,
+                 on_remote_event_history_refresh: Optional[Callable[[int], None]] = None):
         """
         初期化
         
@@ -50,17 +52,26 @@ class CowCard:
             rule_engine: RuleEngine インスタンス（イベント追加ボタン用）
             event_dictionary_path: event_dictionary.json のパス
             item_dictionary_path: item_dictionary.json のパス
+            show_event_history: True のとき CowCard 内にイベント履歴（Treeview）を表示。
+                CowCardWindow のように別ペインで CowHistoryWindow を出す場合は False。
+            on_remote_event_history_refresh: show_event_history が False のとき、履歴更新を
+                外部（例: CowHistoryWindow）へ渡すコールバック（cow_auto_id を渡す）。
         """
         try:
             print("DEBUG: CowCard.__init__ 開始")
+            
+            self.show_event_history = show_event_history
+            self.on_remote_event_history_refresh = on_remote_event_history_refresh
             
             self.db = db_handler
             self.formula_engine = formula_engine
             self.rule_engine = rule_engine  # None でもOK
             self.event_dict_path = event_dictionary_path
             self.item_dict_path = item_dictionary_path
-            self.calculated_items_path = Path("config/cow_card_calculated_items.json")
-            self.calc_layout_path = Path("config/cow_card_calc_layout.json")
+            # 相対パス依存だと起動カレントディレクトリ次第で別ファイルが生成され、
+            # USERタブが初期化されたように見えるため、APP_CONFIG_DIR 配下に固定する。
+            self.calculated_items_path = APP_CONFIG_DIR / "cow_card_calculated_items.json"
+            self.calc_layout_path = APP_CONFIG_DIR / "cow_card_calc_layout.json"
             self.calculated_item_codes: List[str] = self._load_calculated_item_codes()
             # 各タブの並び順を保持する辞書
             self.tab_orders: Dict[str, List[str]] = self._load_tab_orders()
@@ -445,10 +456,64 @@ class CowCard:
                 value_label.bind("<Double-Button-1>", self._on_edit_pen)
                 value_label.bind("<Button-3>", lambda e, k=key: self._on_basic_right_click(k, e))
         
-        # ========== 中：計算項目（タブ構造） ==========
-        # 下部のイベント履歴を廃止したため、空いたスペースを項目タブでいっぱいに使う
-        calc_frame = ttk.LabelFrame(main_frame, text="項目", padding=5)
-        calc_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # ========== 中：項目（＋ 単体表示時のみ CowCard 内にイベント履歴） ==========
+        if self.show_event_history:
+            content_paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+            content_paned.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+            left_wrap = ttk.Frame(content_paned)
+            calc_frame = ttk.LabelFrame(left_wrap, text="項目", padding=5)
+            calc_frame.pack(fill=tk.BOTH, expand=True)
+
+            event_frame = ttk.LabelFrame(content_paned, text="イベント履歴", padding=5)
+            filter_row = ttk.Frame(event_frame)
+            filter_row.pack(fill=tk.X, pady=(0, 5))
+            self.reproduction_filter_var = tk.BooleanVar(value=False)
+            ttk.Checkbutton(
+                filter_row,
+                text="繁殖関連イベントのみ",
+                variable=self.reproduction_filter_var,
+                command=self._on_reproduction_filter_changed,
+            ).pack(side=tk.LEFT)
+
+            tree_frame = ttk.Frame(event_frame)
+            tree_frame.pack(fill=tk.BOTH, expand=True)
+            ev_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+            self.event_tree = ttk.Treeview(
+                tree_frame,
+                columns=("date", "dim", "name", "note"),
+                show="headings",
+                height=16,
+                yscrollcommand=ev_scroll.set,
+                selectmode="browse",
+            )
+            ev_scroll.config(command=self.event_tree.yview)
+            self.event_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            ev_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+            self.event_tree.heading("date", text="日付")
+            self.event_tree.heading("dim", text="DIM")
+            self.event_tree.heading("name", text="イベント")
+            self.event_tree.heading("note", text="備考")
+            self.event_tree.column("date", width=92, anchor=tk.W, stretch=False)
+            self.event_tree.column("dim", width=44, anchor=tk.E, stretch=False)
+            self.event_tree.column("name", width=88, anchor=tk.W, stretch=False)
+            self.event_tree.column("note", width=220, anchor=tk.W, stretch=True)
+
+            self.event_tree.bind("<Double-1>", self._on_event_double_click)
+            self.event_tree.bind("<Button-3>", self._on_event_right_click)
+
+            content_paned.add(left_wrap, weight=3)
+            content_paned.add(event_frame, weight=2)
+            try:
+                content_paned.paneconfigure(left_wrap, minsize=320)
+                content_paned.paneconfigure(event_frame, minsize=280)
+            except tk.TclError:
+                pass
+        else:
+            self.event_tree = None
+            calc_frame = ttk.LabelFrame(main_frame, text="項目", padding=5)
+            calc_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # Notebook（タブ構造）を作成（縦方向にも拡張）
         self.calc_notebook = ttk.Notebook(calc_frame)
@@ -683,6 +748,9 @@ class CowCard:
             
             # 最終日付を計算してコールバックで通知
             self._calculate_and_notify_latest_dates(cow_auto_id)
+
+            # イベント履歴（右ペイン）
+            self._display_events(cow_auto_id)
             
         except Exception as e:
             import traceback
@@ -2304,10 +2372,15 @@ class CowCard:
     def _display_events(self, cow_auto_id: int):
         """イベント履歴を表示（event_date DESC順）"""
         try:
-            
+            tree = getattr(self, "event_tree", None)
+            if tree is None:
+                if self.on_remote_event_history_refresh:
+                    self.on_remote_event_history_refresh(cow_auto_id)
+                return
+
             # 既存のアイテムをクリア
-            for item in self.event_tree.get_children():
-                self.event_tree.delete(item)
+            for item in tree.get_children():
+                tree.delete(item)
             
             # イベントを取得（既にevent_date DESC順でソート済み）
             events = self.db.get_events_by_cow(cow_auto_id, include_deleted=False)
@@ -2460,7 +2533,7 @@ class CowCard:
                     
                     # Treeviewに追加（iid に event_id を紐づける）
                     # DB由来イベントは iid = str(event_id) とする
-                    self.event_tree.insert(
+                    tree.insert(
                         '',
                         'end',
                         iid=str(event_id),

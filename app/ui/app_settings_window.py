@@ -41,8 +41,8 @@ class AppSettingsWindow:
         
         self.window = tk.Toplevel(parent)
         self.window.title("アプリ設定")
-        self.window.geometry("520x480")
-        self.window.minsize(480, 420)
+        self.window.geometry("520x580")
+        self.window.minsize(480, 500)
         self.window.configure(bg=self._BG)
         
         self._create_widgets()
@@ -108,6 +108,41 @@ class AppSettingsWindow:
         )
         self.preview_label.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         
+        # ライセンス情報
+        lic_frame = tk.Frame(content, bg=self._BG, padx=16, pady=12,
+                             highlightbackground="#e0e7ef", highlightthickness=1)
+        lic_frame.pack(fill=tk.X, pady=(0, 12))
+
+        tk.Label(lic_frame, text="ライセンス", font=(self._FONT, 11, "bold"),
+                 bg=self._BG, fg=self._TITLE_FG).pack(anchor=tk.W)
+
+        try:
+            import builtins
+            from modules.license_manager import LicenseStatus as _LS
+            _lic = getattr(builtins, "_falcon_license", None)
+            lic_text = _lic.summary() if _lic else "（情報なし）"
+            is_activatable = _lic and _lic.status in (
+                _LS.TRIAL_ACTIVE, _LS.TRIAL_EXPIRED, _LS.LICENSE_EXPIRED
+            )
+        except Exception:
+            lic_text = "（取得失敗）"
+            is_activatable = False
+
+        tk.Label(lic_frame, text=lic_text, font=(self._FONT, 9),
+                 bg=self._BG, fg=self._DESC_FG, wraplength=440, justify=tk.LEFT
+                 ).pack(anchor=tk.W, pady=(4, 0))
+
+        if is_activatable:
+            def _open_activation():
+                from ui.license_window import LicenseActivationWindow
+                LicenseActivationWindow(self.window, allow_close=True, info=_lic)
+            tk.Button(
+                lic_frame, text="ライセンスキーを入力する",
+                font=(self._FONT, 9), relief=tk.FLAT,
+                bg="#1e2a3a", fg="white", cursor="hand2", padx=12, pady=5,
+                command=_open_activation
+            ).pack(anchor=tk.W, pady=(8, 0))
+
         # フッター（ボタン）・余白を十分にとって切れないように
         footer = tk.Frame(self.window, bg=self._BG, pady=20)
         footer.pack(fill=tk.X)

@@ -71,6 +71,7 @@ _setup_japanese_font()
 
 class GraphWindow:
     """グラフ表示ウィンドウ（Toplevel）"""
+    RC_SCATTER_ORDER = [1, 2, 4, 3, 5, 6]
     
     def __init__(self, parent: tk.Tk, graph_type: str,
                  x_item: str, y_item: str = "",
@@ -119,11 +120,16 @@ class GraphWindow:
         self.last_click_y = None
         self.double_click_threshold = 0.3  # ダブルクリックとみなす時間間隔（秒）
         self.double_click_position_threshold = 5  # ダブルクリックとみなす位置の差（ピクセル）
+        self.crosshair_enabled_var = tk.BooleanVar(value=False)
+        self._crosshair_vline = None
+        self._crosshair_hline = None
+        self._crosshair_ax = None
+        self._crosshair_fixed = False  # True のときクリック位置に固定し、マウス移動では動かさない
         
         # ウィンドウ作成
         try:
             self.window = tk.Toplevel(parent)
-            self.window.title(f"グラフ - {graph_type}")
+            self.window.title(f"グラフ: {x_item} × {classification}" if classification else f"グラフ: {x_item}")
             self.window.geometry("1000x700")
             
             self._create_widgets()
@@ -145,7 +151,29 @@ class GraphWindow:
         # メインフレーム
         main_frame = ttk.Frame(self.window, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        
+
+        # コマンド表示ラベル
+        self.command_label = tk.Label(
+            main_frame, text="", font=("Meiryo UI", 9), anchor=tk.W, foreground="#333333"
+        )
+        self.command_label.pack(fill=tk.X, padx=0, pady=(0, 4))
+
+        # グラフ操作（常時表示：右クリック・Ctrl+C と同じコピー）
+        graph_toolbar = ttk.Frame(main_frame)
+        graph_toolbar.pack(fill=tk.X, padx=0, pady=(0, 6))
+        ttk.Button(
+            graph_toolbar,
+            text="グラフをコピー",
+            command=self._copy_graph_to_clipboard,
+            width=16,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(
+            graph_toolbar,
+            text="画像として保存...",
+            command=self._save_graph_as_image,
+            width=18,
+        ).pack(side=tk.LEFT)
+
         # 分類項目チェックボックスフレーム（散布図・生存曲線の場合のみ表示）
         self.classification_frame = None
         self.classification_vars: Dict[str, tk.BooleanVar] = {}
@@ -187,6 +215,15 @@ class GraphWindow:
         canvas_widget.pack(fill=tk.BOTH, expand=True)
         # 右クリックでコンテキストメニュー（グラフをコピー）
         canvas_widget.bind("<Button-3>", self._on_graph_right_click)
+        # クリップボードコピーのショートカット（PowerPoint貼り付け用途）
+        self.window.bind("<Control-c>", lambda _event: self._copy_graph_to_clipboard())
+        self.window.bind("<Control-C>", lambda _event: self._copy_graph_to_clipboard())
+        self.window.bind("<Escape>", self._on_crosshair_escape)
+        # 十字基準線は全グラフで共通表示できるようにする
+        self.canvas._falcon_cid_crosshair = self.canvas.mpl_connect('motion_notify_event', self._on_graph_mouse_move)
+        self.canvas._falcon_cid_crosshair_press = self.canvas.mpl_connect(
+            "button_press_event", self._on_crosshair_button_press
+        )
         
         # 散布図の場合のみ、クリックイベントとマウス移動イベントを接続（重複接続を防ぐ）
         
@@ -221,12 +258,37 @@ class GraphWindow:
     def _on_graph_right_click(self, event):
         """グラフ上で右クリックしたときにコンテキストメニューを表示"""
         menu = tk.Menu(self.window, tearoff=0)
-        menu.add_command(label="グラフをコピー", command=self._copy_graph_to_clipboard)
+        menu.add_command(label="グラフをコピー (Ctrl+C)", command=self._copy_graph_to_clipboard)
         menu.add_command(label="画像として保存...", command=self._save_graph_as_image)
+        menu.add_separator()
+        menu.add_checkbutton(
+            label="十字基準線を表示（移動で追従・クリックで固定）",
+            variable=self.crosshair_enabled_var,
+            command=self._on_crosshair_toggle
+        )
+        menu.add_command(label="十字の固定を解除 (Esc)", command=self._release_crosshair_fixed)
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _on_crosshair_toggle(self):
+        """十字基準線のON/OFF切り替え"""
+        if not self.crosshair_enabled_var.get():
+            self._crosshair_fixed = False
+            self._hide_crosshair()
+            self.canvas.draw_idle()
+
+    def _release_crosshair_fixed(self):
+        """固定を解除し、再びカーソルに追従させる"""
+        if not self.crosshair_enabled_var.get():
+            return
+        if self._crosshair_fixed:
+            self._crosshair_fixed = False
+            self.canvas.draw_idle()
+
+    def _on_crosshair_escape(self, _event=None):
+        self._release_crosshair_fixed()
     
     def _save_graph_as_image(self):
         """グラフをPNG画像ファイルとして保存"""
@@ -373,9 +435,8 @@ class GraphWindow:
             # グラフを描画
             self.canvas.draw()
             
-            # 散布図の場合、アクティブなaxesをcanvasに保存
-            if self.graph_type == "散布図":
-                self.canvas._falcon_active_axes = self.ax
+            # 十字基準線・クリック判定用にアクティブな axes を常に保持
+            self.canvas._falcon_active_axes = self.ax
             
         except Exception as e:
             logging.error(f"グラフ描画エラー: {e}", exc_info=True)
@@ -458,33 +519,49 @@ class GraphWindow:
         x_item_display = self._get_item_display_name(self.x_item)
         classification_display = self._get_item_display_name(self.classification) if self.classification else "分類"
         
-        # 棒グラフを作成（Rのようなスタイル）
-        bars = self.ax.bar(range(len(categories)), means, color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
-        
+        # ウィンドウタイトルとコマンドラベルを更新
+        title_str = f"グラフ: {x_item_display} × {classification_display}"
+        self.window.title(title_str)
+        cmd_str = f"コマンド: 集計：{self.x_item.lower()}：{self.classification.lower() if self.classification else ''}"
+        if hasattr(self, 'command_label') and self.command_label.winfo_exists():
+            self.command_label.config(text=cmd_str)
+
+        # 背景色を統一
+        self.fig.patch.set_facecolor('white')
+        self.ax.set_facecolor('white')
+
+        # 棒グラフを作成
+        bars = self.ax.bar(range(len(categories)), means, color='steelblue', width=0.6)
+
         # X軸のラベルに頭数を追加（例：1 (N=19)）
         x_labels_with_n = []
         for i, cat in enumerate(categories):
             n = counts[i] if i < len(counts) else 0
             x_labels_with_n.append(f"{cat}\n(N={n})")
-        
+
         # X軸のティック位置とラベルを設定
         self.ax.set_xticks(range(len(categories)))
         self.ax.set_xticklabels(x_labels_with_n, rotation=0, ha='center')
-        
+
         # ラベルとタイトルを設定
         self.ax.set_xlabel(classification_display, fontsize=11, fontweight='bold')
         self.ax.set_ylabel(f"{x_item_display}平均", fontsize=11, fontweight='bold')
         self.ax.set_title(f"{x_item_display}平均 × {classification_display}", fontsize=12, fontweight='bold', pad=15)
-        
-        # グリッドを追加（Rのようなスタイル）
-        self.ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+
+        # グリッドとスパイン
+        self.ax.grid(True, color='#e0e0e0', linewidth=0.8, axis='y')
         self.ax.set_axisbelow(True)
-        
+        self.ax.spines['top'].set_color('#cccccc')
+        self.ax.spines['right'].set_color('#cccccc')
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
+        self.ax.tick_params(colors='#555555')
+
         # Y軸を常に0起点にする（少し余白を追加）
         y_max = max(means) if means else 1
         y_range = y_max
         self.ax.set_ylim(0, y_max + y_range * 0.1)
-        
+
         # 各棒の上に値を表示
         for i, (bar, mean) in enumerate(zip(bars, means)):
             height = bar.get_height()
@@ -506,6 +583,8 @@ class GraphWindow:
         x_value_missing = 0
         y_value_missing = 0
         valid_data = 0
+        is_x_rc_axis = self._is_rc_item(self.x_item)
+        is_y_rc_axis = self._is_rc_item(self.y_item)
         
         logging.info(f"散布図描画開始: 牛の数={len(cows)}, X軸={self.x_item}, Y軸={self.y_item}, 分類={self.classification}")
         
@@ -543,6 +622,17 @@ class GraphWindow:
             if y_value is None:
                 y_value_missing += 1
                 continue
+
+            if is_x_rc_axis:
+                x_value = self._to_rc_scatter_position(x_value)
+                if x_value is None:
+                    x_value_missing += 1
+                    continue
+            if is_y_rc_axis:
+                y_value = self._to_rc_scatter_position(y_value)
+                if y_value is None:
+                    y_value_missing += 1
+                    continue
             
             # データを追加
             if classification_value not in classification_data:
@@ -627,6 +717,10 @@ class GraphWindow:
                         pass
                 # 数値の場合は数値順
                 elif x.isdigit():
+                    if self._is_rc_item(self.classification):
+                        rc_int = int(x)
+                        if rc_int in self.RC_SCATTER_ORDER:
+                            return (5, self.RC_SCATTER_ORDER.index(rc_int))
                     return (5, int(x))
             # 数値の場合は数値順
             elif isinstance(x, int):
@@ -799,24 +893,23 @@ class GraphWindow:
         self.ax.set_xlabel(x_item_display)
         self.ax.set_ylabel(y_item_display)
         self.ax.set_title(f"{y_item_display} vs {x_item_display}")
-        self.ax.grid(True, alpha=0.3)
+        self.fig.patch.set_facecolor('white')
+        self.ax.set_facecolor('white')
+        self.ax.grid(True, color='#e0e0e0', linewidth=0.8)
+        self.ax.spines['top'].set_color('#cccccc')
+        self.ax.spines['right'].set_color('#cccccc')
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
+        self.ax.tick_params(colors='#555555')
         
         # X軸が繁殖コード（RC）の場合は、目盛りラベルに意味を追加
         normalized_x_item = self.x_item.upper() if self.x_item else ""
         if normalized_x_item == "RC" or x_item_display in ("繁殖コード", "繁殖区分"):
-            def rc_formatter_x(value, pos):
-                """繁殖コードのフォーマッター（X軸用）"""
-                try:
-                    rc_num = int(value)
-                    meaning = self._get_rc_meaning(rc_num)
-                    if meaning:
-                        return f"{rc_num}：{meaning}"
-                    else:
-                        return str(rc_num)
-                except (ValueError, TypeError):
-                    return str(value)
-            from matplotlib.ticker import FuncFormatter
-            self.ax.xaxis.set_major_formatter(FuncFormatter(rc_formatter_x))
+            rc_ticks = list(range(len(self.RC_SCATTER_ORDER)))
+            rc_labels = [f"{rc}：{self._get_rc_meaning(rc)}" for rc in self.RC_SCATTER_ORDER]
+            self.ax.set_xticks(rc_ticks)
+            self.ax.set_xticklabels(rc_labels, rotation=30, ha='right')
+            self.ax.set_xlim(-0.5, len(self.RC_SCATTER_ORDER) - 0.5)
         # X軸が生まれた年（BTHYR）の場合は整数年で表示（2024, 2025, 2026）
         elif normalized_x_item == "BTHYR" or x_item_display == "生まれた年":
             from matplotlib.ticker import FuncFormatter, MaxNLocator
@@ -858,19 +951,11 @@ class GraphWindow:
         # Y軸が繁殖コード（RC）の場合は、目盛りラベルに意味を追加
         normalized_y_item = self.y_item.upper() if self.y_item else ""
         if normalized_y_item == "RC" or y_item_display in ("繁殖コード", "繁殖区分"):
-            def rc_formatter(value, pos):
-                """繁殖コードのフォーマッター"""
-                try:
-                    rc_num = int(value)
-                    meaning = self._get_rc_meaning(rc_num)
-                    if meaning:
-                        return f"{rc_num}：{meaning}"
-                    else:
-                        return str(rc_num)
-                except (ValueError, TypeError):
-                    return str(value)
-            from matplotlib.ticker import FuncFormatter
-            self.ax.yaxis.set_major_formatter(FuncFormatter(rc_formatter))
+            rc_ticks = list(range(len(self.RC_SCATTER_ORDER)))
+            rc_labels = [f"{rc}：{self._get_rc_meaning(rc)}" for rc in self.RC_SCATTER_ORDER]
+            self.ax.set_yticks(rc_ticks)
+            self.ax.set_yticklabels(rc_labels)
+            self.ax.set_ylim(-0.5, len(self.RC_SCATTER_ORDER) - 0.5)
         
         # Y軸の範囲を設定（マイナス値がある場合はデータ範囲に合わせる）
         y_min, y_max = self.ax.get_ylim()
@@ -880,7 +965,8 @@ class GraphWindow:
             self.ax.set_ylim(bottom=y_min - margin, top=y_max + margin)
         else:
             # すべて正の値の場合は0起点
-            self.ax.set_ylim(bottom=0, top=y_max if y_max > 0 else 1)
+            if not is_y_rc_axis:
+                self.ax.set_ylim(bottom=0, top=y_max if y_max > 0 else 1)
         
         # 凡例を表示（分類がある場合のみ）
         if self.classification and len(enabled_classifications) > 1:
@@ -996,6 +1082,10 @@ class GraphWindow:
                     pass
             # 数値の場合は数値順
             elif x.isdigit():
+                if self._is_rc_item(self.classification):
+                    rc_int = int(x)
+                    if rc_int in self.RC_SCATTER_ORDER:
+                        return (5, self.RC_SCATTER_ORDER.index(rc_int))
                 return (5, int(x))
             # その他は文字列順
             return (6, x)
@@ -1026,6 +1116,11 @@ class GraphWindow:
     def _redraw_graph(self):
         """グラフを再描画（チェックボックス変更時など）"""
         try:
+            self._crosshair_fixed = False
+            self._hide_crosshair()
+            self._crosshair_vline = None
+            self._crosshair_hline = None
+            self._crosshair_ax = None
             if self.graph_type == "空胎日数生存曲線":
                 all_cows = self.db.get_all_cows()
                 survival_data = self._compute_days_open_survival_data(all_cows)
@@ -1050,6 +1145,94 @@ class GraphWindow:
                 self.canvas._falcon_active_axes = self.ax
         except Exception as e:
             logging.error(f"グラフ再描画エラー: {e}", exc_info=True)
+
+    def _hide_crosshair(self):
+        """十字基準線を非表示にする"""
+        if self._crosshair_vline is not None:
+            try:
+                self._crosshair_vline.set_visible(False)
+            except Exception:
+                pass
+        if self._crosshair_hline is not None:
+            try:
+                self._crosshair_hline.set_visible(False)
+            except Exception:
+                pass
+
+    def _on_crosshair_button_press(self, event):
+        """プロット領域を左クリックした位置に十字を固定（追従オフ）。再度クリックで位置を移す。"""
+        if not self.crosshair_enabled_var.get():
+            return
+        if event.button != 1:
+            return
+        active_ax = getattr(self.canvas, "_falcon_active_axes", self.ax)
+        if event.inaxes != active_ax or event.xdata is None or event.ydata is None:
+            return
+
+        self._crosshair_fixed = True
+        if self._crosshair_ax is not active_ax:
+            self._crosshair_vline = None
+            self._crosshair_hline = None
+            self._crosshair_ax = active_ax
+
+        if self._crosshair_vline is None or self._crosshair_hline is None:
+            self._crosshair_vline = active_ax.axvline(
+                x=event.xdata,
+                color="#6e6e6e",
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.8,
+                zorder=50,
+            )
+            self._crosshair_hline = active_ax.axhline(
+                y=event.ydata,
+                color="#6e6e6e",
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.8,
+                zorder=50,
+            )
+        else:
+            self._crosshair_vline.set_xdata([event.xdata, event.xdata])
+            self._crosshair_hline.set_ydata([event.ydata, event.ydata])
+            self._crosshair_vline.set_visible(True)
+            self._crosshair_hline.set_visible(True)
+
+        self.canvas.draw_idle()
+
+    def _on_graph_mouse_move(self, event):
+        """マウス位置に十字基準線を描画（ON時のみ）。クリックで固定中は動かさない。"""
+        if not self.crosshair_enabled_var.get():
+            return
+        if self._crosshair_fixed:
+            return
+
+        active_ax = getattr(self.canvas, '_falcon_active_axes', self.ax)
+        if event.inaxes != active_ax or event.xdata is None or event.ydata is None:
+            self._hide_crosshair()
+            self.canvas.draw_idle()
+            return
+
+        # axesが切り替わった場合は作り直し
+        if self._crosshair_ax is not active_ax:
+            self._crosshair_vline = None
+            self._crosshair_hline = None
+            self._crosshair_ax = active_ax
+
+        if self._crosshair_vline is None or self._crosshair_hline is None:
+            self._crosshair_vline = active_ax.axvline(
+                x=event.xdata, color="#6e6e6e", linestyle="--", linewidth=1.0, alpha=0.8, zorder=50
+            )
+            self._crosshair_hline = active_ax.axhline(
+                y=event.ydata, color="#6e6e6e", linestyle="--", linewidth=1.0, alpha=0.8, zorder=50
+            )
+        else:
+            self._crosshair_vline.set_xdata([event.xdata, event.xdata])
+            self._crosshair_hline.set_ydata([event.ydata, event.ydata])
+            self._crosshair_vline.set_visible(True)
+            self._crosshair_hline.set_visible(True)
+
+        self.canvas.draw_idle()
     
     def _draw_box_plot(self, cows: List[Dict[str, Any]]):
         """箱ひげ図を描画"""
@@ -1089,11 +1272,19 @@ class GraphWindow:
         y_item_display = self._get_item_display_name(self.y_item)
         classification_display = self._get_item_display_name(self.classification) if self.classification else "分類"
         
+        self.fig.patch.set_facecolor('white')
+        self.ax.set_facecolor('white')
         self.ax.boxplot(data, labels=categories)
         self.ax.set_xlabel(classification_display)
         self.ax.set_ylabel(y_item_display)
         self.ax.set_title(f"{y_item_display}の分布（{classification_display}別）")
-        self.ax.grid(True, alpha=0.3)
+        self.ax.grid(True, color='#e0e0e0', linewidth=0.8, axis='y')
+        self.ax.set_axisbelow(True)
+        self.ax.spines['top'].set_color('#cccccc')
+        self.ax.spines['right'].set_color('#cccccc')
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
+        self.ax.tick_params(colors='#555555')
         
         # Y軸の範囲を設定（マイナス値がある場合はデータ範囲に合わせる）
         y_min, y_max = self.ax.get_ylim()
@@ -1134,6 +1325,8 @@ class GraphWindow:
         x_item_display = self._get_item_display_name(self.x_item)
         classification_display = self._get_item_display_name(self.classification) if self.classification else "分類"
         
+        self.fig.patch.set_facecolor('white')
+        self.ax.set_facecolor('white')
         self.ax.pie(counts, labels=categories, autopct='%1.1f%%', startangle=90)
         self.ax.set_title(f"{x_item_display}の分布（{classification_display}別）")
     
@@ -1302,14 +1495,30 @@ class GraphWindow:
         self.ax.set_ylim(0, 1.02)
         self.ax.set_xlabel("DIM（分娩後日数）", fontsize=11, fontweight='bold')
         self.ax.set_ylabel("未受胎の割合（生存率）", fontsize=11, fontweight='bold')
-        self.ax.set_title("空胎日数生存曲線", fontsize=12, fontweight='bold', pad=15)
-        # 条件文（P値は後で追記するためここではベースのみ）
-        cond = "経産牛・受胎=P、打ち切り=除籍/繁殖中止/次分娩/DIM220"
-        if self.classification == "条件で分類" and self.condition and self.condition.strip():
-            cond += f"  分類条件：{self.condition.strip()}"
-        self.ax.grid(True, linestyle='--', alpha=0.3)
+        self.ax.set_title("空胎日数生存曲線", fontsize=12, fontweight='bold', pad=22)
+        # グラフ直下の説明（分類・抽出条件・期間・Log-rank はここに集約）
+        ann_lines = [
+            "経産牛・受胎=P、打ち切り=除籍/繁殖中止/次分娩/DIM220",
+        ]
+        if self.classification and str(self.classification).strip():
+            ann_lines.append(f"分類：{self.classification.strip()}")
+        if self.condition and str(self.condition).strip():
+            ann_lines.append(f"条件：{self.condition.strip()}")
+        if self.start_date or self.end_date:
+            ann_lines.append(
+                f"期間：{(self.start_date or '—')} ～ {(self.end_date or '—')}"
+            )
+        cond = "\n".join(ann_lines)
+        self.fig.patch.set_facecolor('white')
+        self.ax.set_facecolor('white')
+        self.ax.grid(True, color='#e0e0e0', linewidth=0.8)
         self.ax.set_axisbelow(True)
-        
+        self.ax.spines['top'].set_color('#cccccc')
+        self.ax.spines['right'].set_color('#cccccc')
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
+        self.ax.tick_params(colors='#555555')
+
         enabled = set()
         if self.classification_vars:
             for cat, var in self.classification_vars.items():
@@ -1346,13 +1555,38 @@ class GraphWindow:
                 except Exception as e:
                     logging.debug("Log-rank検定の計算に失敗: %s", e)
         
-        # サブタイトルにP値を追記してから描画
+        # 1行目に Log-rank P 値を追記
         if p_value_text:
-            cond = cond.rstrip()
-            if not cond.endswith(p_value_text):
-                cond += p_value_text
-        self.ax.text(0.5, 1.0, cond, transform=self.ax.transAxes, fontsize=9,
-                     ha='center', va='bottom', color='#444')
+            lines = cond.split("\n")
+            if lines:
+                lines[0] = lines[0].rstrip() + p_value_text
+            cond = "\n".join(lines)
+        ann = self.ax.text(
+            0.5,
+            1.0,
+            cond,
+            transform=self.ax.transAxes,
+            fontsize=8,
+            ha="center",
+            va="bottom",
+            color="#333333",
+            linespacing=1.25,
+        )
+        ann.set_clip_on(False)
+        # ウィンドウ上部にも同じ要約（スクロールせず確認しやすい）
+        if hasattr(self, "command_label") and self.command_label.winfo_exists():
+            summary_parts = []
+            if self.classification and str(self.classification).strip():
+                summary_parts.append(f"分類={self.classification.strip()}")
+            if self.condition and str(self.condition).strip():
+                summary_parts.append(f"条件={self.condition.strip()}")
+            if self.start_date or self.end_date:
+                summary_parts.append(
+                    f"期間={self.start_date or '—'}～{self.end_date or '—'}"
+                )
+            self.command_label.config(
+                text=("表示条件: " + " / ".join(summary_parts)) if summary_parts else ""
+            )
         
         for idx, (cv, spells) in enumerate(data.items()):
             if str(cv) not in enabled:
@@ -1521,6 +1755,30 @@ class GraphWindow:
             6: "乾乳中"
         }
         return rc_meanings.get(rc_value, "")
+
+    def _is_rc_item(self, item_key: Optional[str]) -> bool:
+        if not item_key:
+            return False
+        key = str(item_key).strip()
+        return key.upper() == "RC" or key in ("繁殖コード", "繁殖区分")
+
+    def _to_rc_scatter_position(self, rc_value: Any) -> Optional[int]:
+        try:
+            rc_int = int(float(rc_value))
+        except (ValueError, TypeError):
+            return None
+        if rc_int not in self.RC_SCATTER_ORDER:
+            return None
+        return self.RC_SCATTER_ORDER.index(rc_int)
+
+    def _from_rc_scatter_position(self, axis_value: Any) -> Optional[int]:
+        try:
+            idx = int(round(float(axis_value)))
+        except (ValueError, TypeError):
+            return None
+        if 0 <= idx < len(self.RC_SCATTER_ORDER):
+            return self.RC_SCATTER_ORDER[idx]
+        return None
     
     def _get_classification_value_label(self, classification_value: str) -> str:
         """分類値の表示ラベルを取得"""
@@ -2096,6 +2354,12 @@ class GraphWindow:
             # X値とY値の表示形式を決定
             if isinstance(x_val, datetime):
                 x_display = x_val.strftime('%Y-%m-%d')
+            elif self._is_rc_item(self.x_item):
+                rc_num = self._from_rc_scatter_position(x_val)
+                if rc_num is not None:
+                    x_display = f"{rc_num}: {self._get_rc_meaning(rc_num)}"
+                else:
+                    x_display = str(x_val)
             elif isinstance(x_val, (int, float)):
                 if self.x_item.upper() == "CALVMO" or x_name == "分娩月":
                     x_display = f"{int(x_val)}月"
@@ -2105,9 +2369,13 @@ class GraphWindow:
                 x_display = str(x_val)
             
             # Y値の表示形式を決定（RCの場合は意味も表示）
-            if self.y_item.upper() == "RC":
-                rc_meaning = self._get_rc_meaning(int(y_val))
-                y_display = f"{int(y_val)}: {rc_meaning}"
+            if self._is_rc_item(self.y_item):
+                rc_num = self._from_rc_scatter_position(y_val)
+                if rc_num is not None:
+                    rc_meaning = self._get_rc_meaning(rc_num)
+                    y_display = f"{rc_num}: {rc_meaning}"
+                else:
+                    y_display = str(y_val)
             elif isinstance(y_val, (int, float)):
                 y_display = f"{y_val:.1f}" if isinstance(y_val, float) else str(int(y_val))
             else:

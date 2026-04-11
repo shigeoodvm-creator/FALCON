@@ -26,8 +26,8 @@ class QueryNormalizer:
             normalization_dir: normalizationディレクトリのパス（Noneの場合はデフォルト）
         """
         if normalization_dir is None:
-            # デフォルトパス: C:\FALCON\normalization
-            normalization_dir = Path(__file__).parent.parent.parent / "normalization"
+            from constants import NORMALIZATION_DIR
+            normalization_dir = NORMALIZATION_DIR
         
         self.normalization_dir = Path(normalization_dir)
         self.items_dict: Dict[str, Any] = {}  # priority と aliases をサポート

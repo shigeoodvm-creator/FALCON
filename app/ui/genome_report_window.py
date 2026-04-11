@@ -237,9 +237,12 @@ class GenomeReportWindow:
 
         self.window = tk.Toplevel(parent)
         self.window.title("ゲノムレポート")
-        self.window.geometry("1000x640")
-        self.window.minsize(820, 520)
+        # 設定・候補リスト・フッターボタンが収まるよう高めに（本文はスクロール可）
+        self.window.geometry("1040x860")
+        self.window.minsize(900, 680)
         self.window.configure(bg=_THEME["bg"])
+        self._main_scroll_canvas: Optional[tk.Canvas] = None
+        self._main_scroll_win_id: Optional[int] = None
         self._apply_font_style()
 
         self.composite_var = tk.StringVar(value="GDWP$")
@@ -334,8 +337,61 @@ class GenomeReportWindow:
     def _create_widgets(self, other_keys: List[str]):
         self._build_header()
 
-        main = ttk.Frame(self.window, padding=0)
-        main.pack(fill=tk.BOTH, expand=True)
+        # フッターを先に pack（BOTTOM）し、操作ボタンを常に表示。本文はその上でスクロール。
+        footer = tk.Frame(self.window, bg=_THEME["bg"], pady=16)
+        btn_primary = tk.Button(
+            footer, text="レポートをHTMLで開く", font=UI_FONT,
+            bg=_THEME["btn_primary_bg"], fg=_THEME["btn_primary_fg"],
+            activebackground="#303f9f", activeforeground="#ffffff",
+            relief=tk.FLAT, padx=20, pady=10, cursor="hand2",
+            command=self._run_report,
+        )
+        btn_primary.pack(side=tk.LEFT, padx=(24, 8))
+        tk.Button(
+            footer, text="用語解説を一覧で開く", font=UI_FONT,
+            bg=_THEME["btn_secondary_bg"], fg=_THEME["btn_secondary_fg"],
+            activebackground="#eceff1", relief=tk.FLAT, padx=16, pady=10,
+            highlightbackground=_THEME["btn_secondary_bd"], highlightthickness=1,
+            cursor="hand2", command=self._open_glossary_window,
+        ).pack(side=tk.LEFT)
+        footer.pack(side=tk.BOTTOM, fill=tk.X)
+
+        scroll_outer = tk.Frame(self.window, bg=_THEME["bg"])
+        scroll_outer.pack(fill=tk.BOTH, expand=True)
+
+        main_canvas = tk.Canvas(
+            scroll_outer, bg=_THEME["bg"], highlightthickness=0,
+        )
+        vscroll_main = ttk.Scrollbar(scroll_outer, orient=tk.VERTICAL, command=main_canvas.yview)
+        main_canvas.configure(yscrollcommand=vscroll_main.set)
+
+        main = tk.Frame(main_canvas, bg=_THEME["bg"])
+        self._main_scroll_win_id = main_canvas.create_window((0, 0), window=main, anchor=tk.NW)
+        self._main_scroll_canvas = main_canvas
+
+        def _on_main_inner_configure(_event=None):
+            main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+
+        def _on_main_canvas_configure(event):
+            try:
+                wid = self._main_scroll_win_id
+                if wid is not None:
+                    main_canvas.itemconfig(wid, width=event.width)
+            except tk.TclError:
+                pass
+
+        main.bind("<Configure>", lambda e: _on_main_inner_configure())
+        main_canvas.bind("<Configure>", _on_main_canvas_configure)
+
+        main_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vscroll_main.pack(side=tk.RIGHT, fill=tk.Y)
+
+        main_canvas.bind("<MouseWheel>", self._on_main_mousewheel)
+        main.bind("<MouseWheel>", self._on_main_mousewheel)
+        main_canvas.bind("<Button-4>", lambda e: main_canvas.yview_scroll(-3, "units"))
+        main_canvas.bind("<Button-5>", lambda e: main_canvas.yview_scroll(3, "units"))
+        main.bind("<Button-4>", lambda e: main_canvas.yview_scroll(-3, "units"))
+        main.bind("<Button-5>", lambda e: main_canvas.yview_scroll(3, "units"))
 
         # 設定カード（期間・総合指数・散布図を1ブロックに）
         settings_card = tk.Frame(main, bg=_THEME["bg"], padx=24, pady=0)
@@ -392,8 +448,13 @@ class GenomeReportWindow:
             fg=_THEME["instruction_fg"],
         ).pack(anchor=tk.W)
 
-        paned = ttk.PanedWindow(main, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        # 親に高さが無いと Paned が潰れるため、固定高さラッパで左右ペインに十分な領域を確保
+        paned_outer = tk.Frame(main, bg=_THEME["bg"], height=480)
+        paned_outer.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        paned_outer.pack_propagate(False)
+
+        paned = ttk.PanedWindow(paned_outer, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
 
         def _set_initial_sash():
             try:
@@ -460,24 +521,31 @@ class GenomeReportWindow:
 
         self._refresh_selected_panel()
 
-        # フッター: メイン操作と補助を1行に（他ウィンドウと統一）
-        footer = tk.Frame(main, bg=_THEME["bg"], pady=16)
-        footer.pack(fill=tk.X)
-        btn_primary = tk.Button(
-            footer, text="レポートをHTMLで開く", font=UI_FONT,
-            bg=_THEME["btn_primary_bg"], fg=_THEME["btn_primary_fg"],
-            activebackground="#303f9f", activeforeground="#ffffff",
-            relief=tk.FLAT, padx=20, pady=10, cursor="hand2",
-            command=self._run_report,
-        )
-        btn_primary.pack(side=tk.LEFT, padx=(24, 8))
-        tk.Button(
-            footer, text="用語解説を一覧で開く", font=UI_FONT,
-            bg=_THEME["btn_secondary_bg"], fg=_THEME["btn_secondary_fg"],
-            activebackground="#eceff1", relief=tk.FLAT, padx=16, pady=10,
-            highlightbackground=_THEME["btn_secondary_bd"], highlightthickness=1,
-            cursor="hand2", command=self._open_glossary_window,
-        ).pack(side=tk.LEFT)
+        self._bind_outer_scroll_recursive(main)
+        self.window.after(100, self._refresh_main_scrollregion)
+
+    def _bind_outer_scroll_recursive(self, widget: tk.Widget):
+        """本文スクロール用ホイール（左の候補リスト内カード用 canvas は除外）"""
+        if widget is self.card_canvas:
+            return
+        widget.bind("<MouseWheel>", self._on_main_mousewheel)
+        widget.bind("<Button-4>", lambda e: self._main_scroll_canvas and self._main_scroll_canvas.yview_scroll(-3, "units"))
+        widget.bind("<Button-5>", lambda e: self._main_scroll_canvas and self._main_scroll_canvas.yview_scroll(3, "units"))
+        for c in widget.winfo_children():
+            self._bind_outer_scroll_recursive(c)
+
+    def _on_main_mousewheel(self, event):
+        """ウィンドウ本文（候補リスト以外）の縦スクロール"""
+        if not self._main_scroll_canvas:
+            return "break"
+        if event.delta:
+            self._main_scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
+        return "break"
+
+    def _refresh_main_scrollregion(self):
+        if self._main_scroll_canvas:
+            self._main_scroll_canvas.update_idletasks()
+            self._main_scroll_canvas.configure(scrollregion=self._main_scroll_canvas.bbox("all"))
 
     def _build_candidate_list(self, grouped: List[Tuple[str, List[str]]]):
         """左パネル: 部門別の候補一覧。各項目はラベル+ⓘ。ダブルクリックで選択に追加。"""
@@ -671,9 +739,11 @@ class GenomeReportWindow:
                 header_frame.pack(fill=tk.X)
             else:
                 header_frame.pack_forget()
+        self.window.after_idle(self._refresh_main_scrollregion)
 
     def _on_card_inner_configure(self, ev):
         self.card_canvas.configure(scrollregion=self.card_canvas.bbox("all"))
+        self._refresh_main_scrollregion()
 
     def _on_canvas_configure(self, ev):
         self.card_canvas.itemconfig(self.card_frame_id, width=ev.width)

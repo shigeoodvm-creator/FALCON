@@ -38,6 +38,7 @@ from modules.query_normalizer import QueryNormalizer
 from modules.query_executor import QueryExecutor
 from modules.query_router import QueryRouter
 from settings_manager import SettingsManager
+from constants import CONFIG_DEFAULT_DIR, NORMALIZATION_DIR
 try:
     from modules.query_executor_v2 import QueryExecutorV2
     from modules.query_renderer import QueryRenderer
@@ -61,6 +62,7 @@ from modules.milk_report_extras import (
 from modules.text_normalizer import normalize_user_input
 from modules.app_settings_manager import get_app_settings_manager
 from modules.activity_log import load_entries
+from modules.cow_registration_excel_template import prompt_save_bulk_cow_registration_template
 from ui.cow_card import CowCard
 from ui.event_input import EventInputWindow
 from ui.introduction_window import IntroductionWindow
@@ -70,7 +72,14 @@ from datetime import date, timedelta
 
 # ========== Mixin imports ==========
 from ui.main_window_dashboard import DashboardMixin
-from ui.main_window_conception_rate import ConceptionRateMixin
+from ui.main_window_conception_rate import (
+    ConceptionRateMixin,
+    FALCON_BAR_CHART_AXIS_LABEL_FS,
+    FALCON_BAR_CHART_GRID_KW,
+    FALCON_BAR_CHART_KW,
+    FALCON_BAR_CHART_TITLE_KW,
+    FALCON_BAR_CHART_VALUE_FS,
+)
 from ui.main_window_scatter import ScatterPlotMixin
 
 
@@ -194,11 +203,8 @@ class MainWindow(
         self.farm_path = farm_path
         
         # 辞書パス（イベント・項目＝本体のみ、コマンド＝農場ごと）
-        app_root = Path(__file__).parent.parent.parent
-        config_default = app_root / "config_default"
-        
         # event_dictionary.json：本体のみ（config_default）
-        default_event_dict = config_default / "event_dictionary.json"
+        default_event_dict = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         if default_event_dict.exists():
             self.event_dict_path = default_event_dict
         else:
@@ -206,19 +212,16 @@ class MainWindow(
             self.event_dict_path = None
         
         # item_dictionary.json：本体のみ（config_default）
-        default_item_dict = config_default / "item_dictionary.json"
+        default_item_dict = CONFIG_DEFAULT_DIR / "item_dictionary.json"
         if default_item_dict.exists():
             self.item_dict_path = default_item_dict
         else:
             print(f"警告: item_dictionary.json が見つかりません: {default_item_dict}")
             self.item_dict_path = None
 
-        # command_dictionary.json：農場ごと（農場フォルダを優先、なければ config_default）
-        farm_command_dict = farm_path / "command_dictionary.json"
-        default_command_dict = config_default / "command_dictionary.json"
-        if farm_command_dict.exists():
-            self.command_dict_path = farm_command_dict
-        elif default_command_dict.exists():
+        # command_dictionary.json：本体（config_default）を使用
+        default_command_dict = CONFIG_DEFAULT_DIR / "command_dictionary.json"
+        if default_command_dict.exists():
             self.command_dict_path = default_command_dict
         else:
             self.command_dict_path = None
@@ -241,6 +244,8 @@ class MainWindow(
         
         # 個体一覧ウィンドウ参照（既に開いていれば前面に出すため）
         self._cow_list_window: Optional[Any] = None
+        # 個体カードポップアップ参照（ダブルクリック起動時の即時破棄防止）
+        self._cow_card_popups: Dict[int, Any] = {}
 
         # SIRE一覧ウィンドウ参照（二重に開かないように1つに統一）
         self._sire_list_window: Optional[Any] = None
@@ -301,9 +306,8 @@ class MainWindow(
         self.current_graph_command: Optional[str] = None  # グラフを表示したコマンド
         
         # QueryRouter/QueryExecutor/QueryRenderer を初期化
-        normalization_dir = Path(__file__).parent.parent.parent / "normalization"
         self.query_router = QueryRouter(
-            normalization_dir=normalization_dir,
+            normalization_dir=NORMALIZATION_DIR,
             item_dictionary_path=self.item_dict_path,
             event_dictionary_path=self.event_dict_path
         )
@@ -332,9 +336,10 @@ class MainWindow(
         self.style.configure('TCombobox', font=(self._main_font_family, self.default_font_size))
         self.style.configure('Treeview', font=(self._main_font_family, self.default_font_size))
         self.style.configure('Treeview.Heading', font=(self._main_font_family, self.default_font_size))
-        # 結果表（表タブ）のみ MS ゴシック
-        self.style.configure('ResultTable.Treeview', font=('MS Gothic', self.default_font_size))
-        self.style.configure('ResultTable.Treeview.Heading', font=('MS Gothic', self.default_font_size))
+        # 結果表（表タブ）のみ視認性のため 1 段階大きくする
+        result_table_font_size = self.default_font_size + 1
+        self.style.configure('ResultTable.Treeview', font=('MS Gothic', result_table_font_size))
+        self.style.configure('ResultTable.Treeview.Heading', font=('MS Gothic', result_table_font_size))
         self.style.configure('TNotebook', font=(self._main_font_family, self.default_font_size))
         self.style.configure('TNotebook.Tab', font=(self._main_font_family, self.default_font_size))
         
@@ -382,6 +387,29 @@ class MainWindow(
     
     def _create_widgets(self):
         """ウィジェットを作成"""
+        # ── 試用期間バナー ──────────────────────────────────────
+        try:
+            import builtins
+            _lic = getattr(builtins, "_falcon_license", None)
+            if _lic is not None:
+                from ui.license_window import build_trial_banner, LicenseActivationWindow
+                def _open_activation():
+                    def _on_activated():
+                        # バナーを非表示にしてウィンドウタイトルを更新
+                        try:
+                            _banner.destroy()
+                        except Exception:
+                            pass
+                    LicenseActivationWindow(
+                        self.root, on_activated=_on_activated,
+                        allow_close=True, info=_lic
+                    )
+                _banner = build_trial_banner(self.root, _lic, on_activate=_open_activation)
+                if _banner is not None:
+                    _banner.pack(fill=tk.X, side=tk.TOP, before=None)
+        except Exception as _e:
+            logging.warning(f"試用バナー表示エラー: {_e}")
+
         # メインPanedWindow（左右分割）
         main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_paned.pack(fill=tk.BOTH, expand=True)
@@ -457,13 +485,38 @@ class MainWindow(
                 ("📥 データ吸い込み", self._on_milk_test_import),
                 ("📤 データ出力",    self._on_data_output),
             ]),
+            ("個体チェック", [
+                ("🔔 長期空胎チェック",  self._on_check_long_open),
+                ("🔔 分娩超過チェック",  self._on_check_overdue_calving),
+            ]),
             ("設定・管理", [
                 ("📚 辞書・設定",    self._on_dictionary_settings),
-                ("🏡 農場管理",      self._on_farm_management),
                 ("⚙️ アプリ設定",   self._on_app_settings),
-                ("📚 使用説明書",    self._on_usage_manual),
             ]),
         ]
+
+        # ── バージョンフッター（サイドバー下部固定）──────────────────
+        from constants import APP_VERSION as _APP_VER
+        _ver_footer = tk.Frame(left_container, bg="#131e2b", height=34)
+        _ver_footer.pack(side=tk.BOTTOM, fill=tk.X)
+        _ver_footer.pack_propagate(False)
+        _ver_sep = tk.Frame(left_container, bg="#2a3a4a", height=1)
+        _ver_sep.pack(side=tk.BOTTOM, fill=tk.X)
+
+        _ver_lbl = tk.Label(
+            _ver_footer, text=f"FALCON  v{_APP_VER}",
+            font=(_df, 8), bg="#131e2b", fg="#4a6070",
+            cursor="hand2", anchor=tk.W, padx=14
+        )
+        _ver_lbl.pack(fill=tk.BOTH, expand=True)
+
+        def _ver_hover_in(e):  _ver_lbl.config(fg="#7a9ab0")
+        def _ver_hover_out(e): _ver_lbl.config(fg="#4a6070")
+        for _w in (_ver_footer, _ver_lbl):
+            _w.bind("<Button-1>", lambda e: self._on_about())
+            _w.bind("<Enter>",    _ver_hover_in)
+            _w.bind("<Leave>",    _ver_hover_out)
+        # ─────────────────────────────────────────────────────────────
 
         menu_inner = tk.Frame(left_container, bg=side_bg, padx=0, pady=8)
         menu_inner.pack(fill=tk.BOTH, expand=True)
@@ -487,6 +540,9 @@ class MainWindow(
             if _active['indicator'] is not ind:
                 btn.config(bg=side_bg)
 
+        # メニュー1行の高さを固定（絵文字の字揃え差で行間が不均等に見えるのを防ぐ）
+        _menu_row_h = 44
+
         for group_label, buttons in menu_groups:
             lbl_frame = tk.Frame(menu_inner, bg=side_bg, padx=18)
             lbl_frame.pack(fill=tk.X, pady=(10, 2))
@@ -494,8 +550,9 @@ class MainWindow(
                      font=(_df, 8), bg=side_bg, fg="#607d8b").pack(anchor=tk.W)
 
             for text, command in buttons:
-                row = tk.Frame(menu_inner, bg=side_bg)
-                row.pack(fill=tk.X, pady=1)
+                row = tk.Frame(menu_inner, bg=side_bg, height=_menu_row_h)
+                row.pack(fill=tk.X, pady=2)
+                row.pack_propagate(False)
 
                 ind = tk.Frame(row, bg=side_bg, width=3)
                 ind.pack(side=tk.LEFT, fill=tk.Y)
@@ -506,9 +563,9 @@ class MainWindow(
                     bg=side_bg, fg=side_fg,
                     activebackground=side_hover_bg, activeforeground=side_fg,
                     relief=tk.FLAT, bd=0, highlightthickness=0,
-                    cursor="hand2", anchor=tk.W, padx=14, pady=9
+                    cursor="hand2", anchor=tk.W, padx=14, pady=0
                 )
-                btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                btn.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
                 def _make_cmd(cmd, indicator):
                     def _cmd():
@@ -556,8 +613,28 @@ class MainWindow(
             header_canvas.winfo_reqwidth() - 12, 34,
             anchor=tk.E, window=_switch_btn, tags="_switch_btn_win")
 
+        # アシスタントON/OFFボタン
+        _assist_init = get_app_settings_manager().get("assist_mode", True)
+        try:
+            from ui.assist_tooltip import set_assist_enabled
+            set_assist_enabled(bool(_assist_init))
+        except Exception:
+            pass
+        _assist_lbl = "アシスタント ON" if _assist_init else "アシスタント OFF"
+        _assist_bg = "#2e7d32" if _assist_init else "#4a5568"
+        self._assist_btn = tk.Button(
+            header_canvas, text=_assist_lbl,
+            font=(_df, 9), bg=_assist_bg, fg="#cfd8dc",
+            activebackground="#4a5a6a", activeforeground="white",
+            relief=tk.FLAT, bd=0, padx=8, pady=3, cursor="hand2",
+            command=self._toggle_assist_mode)
+        header_canvas.create_window(
+            header_canvas.winfo_reqwidth() - 152, 34,
+            anchor=tk.E, window=self._assist_btn, tags="_assist_btn_win")
+
         def _reposition_switch_btn(event=None):
             header_canvas.coords("_switch_btn_win", event.width - 12, 34)
+            header_canvas.coords("_assist_btn_win", event.width - 152, 34)
         header_canvas.bind("<Configure>", _reposition_switch_btn)
 
         # 農場切り替え時に農場名テキストを更新するためのプロキシ
@@ -606,6 +683,7 @@ class MainWindow(
         )
         command_type_combo.pack(side=tk.LEFT)
         command_type_combo.bind("<<ComboboxSelected>>", self._on_command_type_selected)
+        self.command_type_combo = command_type_combo  # アシスタントツールチップ添付用
         
         ttk.Label(command_frame, text="コマンド:", font=(self._main_font_family, self.default_font_size)).pack(side=tk.LEFT, padx=(10, 5))
         # コマンド入力欄をComboboxに変更（プルダウンで履歴を表示）
@@ -637,7 +715,7 @@ class MainWindow(
         
         # イベント選択用のコンボボックス（プルダウン）
         # イベント辞書からイベント一覧を取得
-        event_dict_path = Path(__file__).parent.parent.parent / "config_default" / "event_dictionary.json"
+        event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         event_options = []
         self.event_number_to_name = {}
         if event_dict_path.exists():
@@ -1006,7 +1084,7 @@ class MainWindow(
             state=tk.DISABLED
         )
         self.table_print_btn.pack(side=tk.LEFT, padx=2)
-        
+
         # 表用のTreeview（グリッド形式）
         table_container = ttk.Frame(table_frame)
         table_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -1117,6 +1195,261 @@ class MainWindow(
         # ウィンドウスイッチャーのポーリング開始（全Toplevelを自動検出）
         self.root.after(500, self._poll_all_toplevels)
 
+        # アシスタントツールチップをセットアップ
+        self.root.after(200, self._setup_assist_tooltips)
+
+    def _toggle_assist_mode(self):
+        """アシスタントON/OFFトグル"""
+        try:
+            from ui.assist_tooltip import is_assist_enabled, set_assist_enabled
+        except Exception:
+            return
+        new_val = not is_assist_enabled()
+        set_assist_enabled(new_val)
+        get_app_settings_manager().set("assist_mode", new_val)
+        if new_val:
+            self._assist_btn.config(text="アシスタント ON", bg="#2e7d32")
+        else:
+            self._assist_btn.config(text="アシスタント OFF", bg="#4a5568")
+
+    def _setup_assist_tooltips(self):
+        """主要ウィジェットにアシスタントツールチップを添付する"""
+        try:
+            from ui import assist_tooltip as at
+        except Exception:
+            return
+
+        # ---- タイプ選択コンボ ----
+        if hasattr(self, 'command_type_combo'):
+            self._assist_tooltip_command_type = at.attach(
+                self.command_type_combo,
+                title="分析タイプを選択してください",
+                body=(
+                    "妊娠率      : 21日サイクルの妊娠率（DairyComp305互換）\n"
+                    "妊娠率（DIM）: DIM帯別の妊娠率\n"
+                    "受胎率（経産）: 経産牛の授精→受胎率\n"
+                    "受胎率（未経産）: 未経産牛の受胎率\n"
+                    "リスト      : 個体一覧を任意の条件で表示\n"
+                    "イベントリスト: イベント履歴を一覧表示\n"
+                    "イベント集計 : イベントを月・産次別に集計\n"
+                    "集計（経産牛）: 項目を産次・月別に集計\n"
+                    "グラフ      : 散布図・空胎生存曲線を表示\n"
+                    "項目一括変更 : 複数頭の項目をまとめて変更"
+                ),
+                next_hint="→ タイプを選ぶと次の入力欄が案内されます",
+            )
+
+        # ---- VWP入力欄 ----
+        if hasattr(self, 'pregnancy_rate_vwp_entry'):
+            at.attach(
+                self.pregnancy_rate_vwp_entry,
+                title="VWP（自発待機期間）とは",
+                body=(
+                    "分娩後に繁殖対象となる最低DIM（日数）です。\n"
+                    "この日数を経過した牛が「繁殖対象」にカウントされます。\n\n"
+                    "一般的な目安:\n"
+                    "  初産: 60日 / 経産: 50日（農場設定可）\n"
+                    "  ※本農場の実績値は42日"
+                ),
+                next_hint="→ 期間を設定して「実行」を押してください",
+            )
+
+        # ---- 妊娠率 条件入力欄 ----
+        if hasattr(self, 'pregnancy_rate_condition_entry'):
+            at.attach(
+                self.pregnancy_rate_condition_entry,
+                title="絞り込み条件（省略可）",
+                body=(
+                    "特定グループだけの妊娠率を計算したい場合に入力します。\n\n"
+                    "入力例:\n"
+                    "  産次：初産   → 初産牛のみ\n"
+                    "  産次>=2     → 2産以上\n"
+                    "  空欄のまま  → 全経産牛が対象"
+                ),
+                next_hint="→ 「実行」で計算開始（Enterキーでも可）",
+            )
+
+        # ---- 受胎率 種類選択 ----
+        if hasattr(self, 'conception_rate_type_entry'):
+            at.attach(
+                self.conception_rate_type_entry,
+                title="受胎率の集計軸を選択",
+                body=(
+                    "どの軸で受胎率を分けて見るかを選択します。\n\n"
+                    "  月       : 授精月ごとの受胎率推移\n"
+                    "  産次     : 初産・2産・3産以上別\n"
+                    "  授精回数 : 1回目・2回目…別\n"
+                    "  DIMサイクル: 分娩後の時期別\n"
+                    "  授精種類 : 授精種別ごと\n"
+                    "  SIRE    : 種雄牛ごとの受胎率"
+                ),
+                next_hint="→ 次に「条件」を入力するか、そのまま「実行」",
+            )
+
+        # ---- 受胎率 条件入力欄 ----
+        if hasattr(self, 'conception_rate_condition_entry'):
+            at.attach(
+                self.conception_rate_condition_entry,
+                title="絞り込み条件（省略可）",
+                body=(
+                    "対象を絞り込む場合に入力します。\n\n"
+                    "入力例:\n"
+                    "  DIM<150         → DIM150日未満の授精のみ\n"
+                    "  産次：初産       → 初産牛の授精のみ\n"
+                    "  初回授精         → 1回目の授精のみ\n"
+                    "  空欄のまま       → 全授精が対象"
+                ),
+                next_hint="→ 「実行」で計算開始",
+            )
+
+        # ---- 分類（集計軸）----
+        if hasattr(self, 'classification_entry'):
+            at.attach(
+                self.classification_entry,
+                title="分類（グループ分けの軸）",
+                body=(
+                    "集計結果をどのグループで分けるかを選択します。\n\n"
+                    "  産次          : 産次ごとに平均を表示\n"
+                    "  DIM21         : 21日サイクル別に表示\n"
+                    "  分娩月        : 分娩した月ごとに集計\n"
+                    "  空胎日数100日  : DOPN≤100 / >100 で比較\n\n"
+                    "未選択は全体の平均のみ表示"
+                ),
+                next_hint="→ 「条件」で牛を絞り込むか、「実行」",
+            )
+
+        # ---- 条件入力欄（リスト・集計共通）----
+        if hasattr(self, 'condition_entry'):
+            at.attach(
+                self.condition_entry,
+                title="絞り込み条件の書き方",
+                body=(
+                    "対象牛を絞り込む条件を日本語で入力します。\n\n"
+                    "入力例:\n"
+                    "  DIM<150           → DIM150日未満\n"
+                    "  産次>=2           → 2産以上\n"
+                    "  産次：初産         → 初産牛のみ\n"
+                    "  妊娠牛             → 妊娠確認済みの牛\n"
+                    "  DIM<150 または 妊娠牛 → OR条件\n\n"
+                    "空欄のまま実行すると全頭が対象"
+                ),
+            )
+
+        # ---- 内訳入力欄 ----
+        if hasattr(self, 'breakdown_entry'):
+            at.attach(
+                self.breakdown_entry,
+                title="内訳の区切り値（省略可）",
+                body=(
+                    "集計を細分化する区切り値をカンマ区切りで入力します。\n\n"
+                    "入力例（空胎日数の場合）:\n"
+                    "  150, 200, 300\n"
+                    "  → 0〜150日、151〜200日、201〜300日、300日超\n\n"
+                    "空欄のまま = 自動区切り"
+                ),
+            )
+
+        # ---- コマンド入力欄 ----
+        if hasattr(self, 'command_entry'):
+            at.attach(
+                self.command_entry,
+                title="表示したい項目を入力",
+                body=(
+                    "見たい項目を日本語で入力します。\n\n"
+                    "入力例:\n"
+                    "  ID、産次、DIM      → その列を表示\n"
+                    "  （妊娠率・グラフ・集計は省略可）\n\n"
+                    "「項目一覧を表示」ボタンで使える項目を確認できます"
+                ),
+                next_hint="→ Enterキーまたは「実行」ボタンで実行",
+            )
+
+        # ---- グラフ種類 ----
+        if hasattr(self, 'graph_type_entry'):
+            at.attach(
+                self.graph_type_entry,
+                title="グラフの種類を選択",
+                body=(
+                    "散布図       : X軸・Y軸に項目を指定してプロット\n"
+                    "空胎日数生存曲線: Kaplan-Meier法による\n"
+                    "              受胎までの生存分析"
+                ),
+                next_hint="→ グラフの種類を選ぶとY軸・X軸の入力欄が現れます",
+            )
+
+        # ---- グラフ Y軸・X軸・分類・条件（散布図・生存曲線で使用）----
+        if hasattr(self, 'graph_y_entry'):
+            at.attach(
+                self.graph_y_entry,
+                title="グラフのY軸（縦軸）",
+                body=(
+                    "縦軸に表示する項目を入力します。\n\n"
+                    "項目名（日本語）または項目コード（例: DIM, LACT）が使えます。\n"
+                    "「項目一覧を表示」から選択して入力することもできます。"
+                ),
+                next_hint="→ 続けてX軸を指定するか、「実行」",
+            )
+        if hasattr(self, 'graph_x_entry'):
+            at.attach(
+                self.graph_x_entry,
+                title="グラフのX軸（横軸）",
+                body=(
+                    "横軸に表示する項目を入力します。\n\n"
+                    "項目名またはコードが使えます。\n"
+                    "散布図ではY軸と組み合わせて1頭を1点で表示します。"
+                ),
+                next_hint="→ 分類・条件を選ぶか、「実行」",
+            )
+        if hasattr(self, 'graph_classification_entry'):
+            at.attach(
+                self.graph_classification_entry,
+                title="分類（系列・色分け）",
+                body=(
+                    "データを分けて表示する軸を選びます。\n\n"
+                    "散布図: 系列ごとに色分け\n"
+                    "棒グラフ等: グループの切り口\n\n"
+                    "例: 産次、産次（１産・２産・３産以上）、DIM帯、分娩月など\n"
+                    "空胎日数生存曲線では産次・分娩月・項目・条件の分類も選べます。"
+                ),
+                next_hint="→ 必要なら条件を入力し、「実行」",
+            )
+        if hasattr(self, 'graph_condition_entry'):
+            at.attach(
+                self.graph_condition_entry,
+                title="グラフの絞り込み条件（省略可）",
+                body=(
+                    "プロットする牛を条件で絞り込みます。\n\n"
+                    "入力例:\n"
+                    "  DIM<150           → DIM150日未満の牛のみ\n"
+                    "  産次>=2           → 2産以上\n"
+                    "  産次：初産         → 初産牛のみ\n\n"
+                    "空欄のまま = 条件なし（経産・未経産はグラフ種類に従う）"
+                ),
+                next_hint="→ 「実行」でグラフを表示",
+            )
+
+        # ---- 開始日・終了日（期間）----
+        if hasattr(self, 'start_date_entry'):
+            at.attach(
+                self.start_date_entry,
+                title="集計開始日",
+                body=(
+                    "集計対象サイクルの開始日を指定します。\n"
+                    "形式: YYYY-MM-DD（例: 2024-01-01）\n\n"
+                    "空欄のまま = 全期間（農場開始日から）"
+                ),
+            )
+        if hasattr(self, 'end_date_entry'):
+            at.attach(
+                self.end_date_entry,
+                title="集計終了日",
+                body=(
+                    "集計対象サイクルの終了日を指定します。\n"
+                    "形式: YYYY-MM-DD（例: 2024-12-31）\n\n"
+                    "空欄のまま = 全期間（今日まで）"
+                ),
+                next_hint="→ 「実行」で妊娠率を計算します",
+            )
 
     def show_view(self, view_widget: tk.Widget, view_type: Literal['cow_card', 'list', 'report']):
         """
@@ -1200,12 +1533,21 @@ class MainWindow(
                 try:
                     w = self.root.nametowidget(path)
                     if isinstance(w, tk.Toplevel) and w.winfo_exists():
+                        # overrideredirect=True のウィンドウ（ツールチップ等）はスキップ
+                        try:
+                            if w.overrideredirect():
+                                continue
+                        except Exception:
+                            pass
                         title = w.title() or "ウィンドウ"
                         current[path] = {'window': w, 'label': title}
                         # 新規ウィンドウにtransientを設定
                         if path not in self._open_windows:
                             try:
-                                w.transient(self.root)
+                                # 個体カードは前面制御を独自に行うため、
+                                # ここで transient を強制すると背面化競合が起きる場合がある。
+                                if not str(title).startswith("個体カード"):
+                                    w.transient(self.root)
                             except Exception:
                                 pass
                 except (KeyError, tk.TclError):
@@ -1283,51 +1625,17 @@ class MainWindow(
     
     def _show_cow_card_view(self, cow_auto_id: int):
         """
-        個体カードViewを表示
+        個体カードを表示する（常に別ウィンドウで開く）
         
         Args:
             cow_auto_id: 牛の auto_id
         """
-        # 個体カード用フレームが未配置なら配置（表ノートブックの下に表示）
-        try:
-            if self.main_content_frame.winfo_exists() and not self.main_content_frame.winfo_ismapped():
-                self.main_content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        except tk.TclError:
-            pass
-
-        # 既存のCowCardがあれば再利用、なければ新規作成
-        if 'cow_card' in self.views and self.current_cow_card:
-            cow_card = self.current_cow_card
-            cow_card_widget = cow_card.get_widget()
-        else:
-            # CowCard を作成（parent は必ず main_content_frame）
-            cow_card = CowCard(
-                parent=self.main_content_frame,
-                db_handler=self.db,
-                formula_engine=self.formula_engine,
-                rule_engine=self.rule_engine,
-                event_dictionary_path=self.event_dict_path
-            )
-            cow_card_widget = cow_card.get_widget()
-            # イベント保存時のコールバックを設定
-            cow_card.set_on_event_saved(self._on_event_saved)
-            # 現在の牛を記録
-            self.current_cow_card = cow_card
-        
-        # 牛の情報を読み込んで表示（既存のCowCardでも再読み込み）
-        cow_card.load_cow(cow_auto_id)
-        
-        # View切替（show_view 内で既存のViewを pack_forget）
-        self.show_view(cow_card_widget, 'cow_card')
-        
-        # 現在の牛を記録
-        self.current_cow_auto_id = cow_auto_id
-        
-        # 群全体の最終日付を再計算して表示を更新（個体カード表示時も更新）
-        self._calculate_and_update_farm_latest_dates()
+        # 互換性のためメソッド名は残し、挙動のみ別ウィンドウ起動へ統一する。
+        self._open_cow_card_as_toplevel(int(cow_auto_id))
+        self.current_cow_auto_id = int(cow_auto_id)
     
     def _jump_to_cow_card(self, cow_id: str) -> None:
-        """個体ID（数値・4桁ゼロ埋め）で DB を検索し、個体カードを表示する。"""
+        """個体ID（数値・4桁ゼロ埋め）で DB を検索し、個体カードを別ウィンドウで表示する。"""
         cid = (cow_id or "").strip().zfill(4)
         if not cid.isdigit():
             return
@@ -1344,7 +1652,7 @@ class MainWindow(
         if auto_id is None:
             self.add_message(role="system", text=f"個体ID {cid} のデータが不正です。")
             return
-        self._show_cow_card_view(int(auto_id))
+        self._open_cow_card_as_toplevel(int(auto_id))
     
     def _on_reproduction_checkup(self):
         """繁殖検診メニューをクリック"""
@@ -1371,6 +1679,30 @@ class MainWindow(
         self._reproduction_checkup_window = None
         self._unregister_window('repro_checkup')
     
+    def _on_check_long_open(self):
+        """長期空胎チェックを手動実行"""
+        try:
+            from modules.long_open_alert import show_alert_window
+            show_alert_window(
+                self.root, self.farm_path, self.db,
+                self.formula_engine, self.rule_engine,
+                force=True
+            )
+        except Exception as e:
+            logging.error(f"長期空胎チェックエラー: {e}", exc_info=True)
+
+    def _on_check_overdue_calving(self):
+        """分娩超過チェックを手動実行"""
+        try:
+            from modules.overdue_calving_alert import show_alert_window
+            show_alert_window(
+                self.root, self.farm_path, self.db,
+                self.formula_engine, self.rule_engine,
+                force=True
+            )
+        except Exception as e:
+            logging.error(f"分娩超過チェックエラー: {e}", exc_info=True)
+
     def _on_introduction(self):
         """導入メニューをクリック"""
         intro_win = IntroductionWindow(
@@ -1419,76 +1751,133 @@ class MainWindow(
         self._show_data_import_dialog()
     
     def _show_data_import_dialog(self):
-        """データ吸い込みタイプ選択ダイアログ（デザイン統一・スマート表示）"""
+        """データ吸い込みタイプ選択（乳検レポート等と同一のヘッダー・カード・ボタンスタイル）"""
         # 既に開いていれば前面に出す
         if self._data_import_dialog is not None and self._data_import_dialog.winfo_exists():
             self._data_import_dialog.lift()
             self._data_import_dialog.focus_force()
             return
         _df = "Meiryo UI"
+        bg = "#f5f5f5"
         dialog = tk.Toplevel(self.root)
         dialog.title("データ吸い込み")
         self._data_import_dialog = dialog
-        # 閉じるボタンまで余裕を持ってすべてが表示されるように高さを少し大きめに確保
-        dialog.geometry("640x680")
-        dialog.minsize(620, 640)
-        dialog.configure(bg="#f5f5f5")
-
-        # ttk スタイル（背景色は環境で白抜きになるためフォント・余白のみ指定し、実行も一括削除も同じ見た目で文字を確実に表示）
-        style = ttk.Style()
-        style.configure("DataImport.Exec.TButton", font=(_df, 10), padding=(14, 8))
-        style.configure("DataImport.Secondary.TButton", font=(_df, 10), padding=(14, 8))
-
-        main = ttk.Frame(dialog, padding=24)
-        main.pack(fill=tk.BOTH, expand=True)
-
-        # ヘッダー（タイトル・説明をすっきり）
-        header_frame = ttk.Frame(main)
-        header_frame.pack(fill=tk.X, pady=(0, 20))
-        ttk.Label(header_frame, text="データ吸い込み", font=(_df, 16, "bold")).pack(anchor=tk.W)
-        ttk.Label(header_frame, text="データ吸い込みタイプを選択し、実行または一括削除を押してください。", font=(_df, 9)).pack(anchor=tk.W)
-
-        rows = [
-            ("AI", "人工授精（AI）データを読み込みます", "AI", "AIキャンセル"),
-            ("乳検", "乳検データを読み込みます", "乳検", "乳検キャンセル"),
-            ("ゲノム", "ゲノム関連データを読み込みます", "ゲノム", "ゲノムキャンセル"),
-            ("新規一括導入", "新規個体を一括で登録します", "新規一括導入", "一括導入キャンセル"),
-            ("DC305からイベント吸い込み", "DC305形式Excelからイベントを取り込みます", "DC305", "DC305キャンセル"),
-        ]
-
-        content = ttk.Frame(main)
-        content.pack(fill=tk.BOTH, expand=True)
-        for i, (title, desc, exec_type, cancel_type) in enumerate(rows):
-            card = ttk.LabelFrame(content, text=title, padding=12)
-            card.pack(fill=tk.X, pady=6)
-            row_inner = ttk.Frame(card)
-            row_inner.pack(fill=tk.X)
-            ttk.Label(row_inner, text=desc, font=(_df, 9)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 12))
-            ttk.Button(
-                row_inner, text="実行", style="DataImport.Exec.TButton", width=10,
-                command=lambda e=exec_type: self._on_data_import_selected(e, dialog),
-            ).pack(side=tk.RIGHT, padx=(4, 0))
-            ttk.Button(
-                row_inner, text="一括削除", style="DataImport.Secondary.TButton", width=10,
-                command=lambda c=cancel_type: self._on_data_import_selected(c, dialog),
-            ).pack(side=tk.RIGHT)
-
-        # フッター（閉じるはセカンダリで統一）
-        footer = ttk.Frame(main)
-        footer.pack(fill=tk.X, pady=(20, 0))
-        ttk.Separator(footer, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(0, 12))
+        dialog.geometry("700x720")
+        dialog.minsize(640, 660)
+        dialog.configure(bg=bg)
 
         def _close_data_import():
             self._data_import_dialog = None
-            self._unregister_window('data_import')
+            self._unregister_window("data_import")
             dialog.destroy()
 
         dialog.protocol("WM_DELETE_WINDOW", _close_data_import)
-        ttk.Button(footer, text="閉じる", style="DataImport.Secondary.TButton", width=12, command=_close_data_import).pack(side=tk.LEFT)
-        self._register_window('data_import', dialog, 'データ吸い込み')
+
+        self._build_unified_dialog_header(
+            dialog,
+            "📥",
+            "データ吸い込み",
+            "データ吸い込みタイプを選択し、実行または一括削除を押してください。",
+        )
+
+        body = tk.Frame(dialog, bg=bg, padx=24)
+        body.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+
+        btn_primary_bg = "#3949ab"
+        btn_primary_fg = "#ffffff"
+        btn_secondary_bg = "#fafafa"
+        btn_secondary_fg = "#546e7a"
+        btn_secondary_bd = "#b0bec5"
+
+        def _primary_btn(parent, text, cmd):
+            return tk.Button(
+                parent,
+                text=text,
+                font=(_df, 10),
+                bg=btn_primary_bg,
+                fg=btn_primary_fg,
+                activebackground="#303f9f",
+                activeforeground="#ffffff",
+                relief=tk.FLAT,
+                padx=14,
+                pady=8,
+                cursor="hand2",
+                command=cmd,
+            )
+
+        def _secondary_btn(parent, text, cmd):
+            return tk.Button(
+                parent,
+                text=text,
+                font=(_df, 10),
+                bg=btn_secondary_bg,
+                fg=btn_secondary_fg,
+                activebackground="#eceff1",
+                relief=tk.FLAT,
+                padx=12,
+                pady=8,
+                highlightbackground=btn_secondary_bd,
+                highlightthickness=1,
+                cursor="hand2",
+                command=cmd,
+            )
+
+        rows = [
+            ("AI", "人工授精（AI）データを読み込みます", "AI", "AIキャンセル", False),
+            ("乳検", "乳検データを読み込みます", "乳検", "乳検キャンセル", False),
+            ("ゲノム", "ゲノム関連データを読み込みます", "ゲノム", "ゲノムキャンセル", False),
+            ("新規一括導入", "新規個体を一括で登録します", "新規一括導入", "一括導入キャンセル", True),
+            ("DC305からイベント吸い込み", "DC305形式Excelからイベントを取り込みます", "DC305", "DC305キャンセル", False),
+        ]
+
+        for title, desc, exec_type, cancel_type, show_template in rows:
+            card = tk.Frame(
+                body,
+                bg=bg,
+                padx=16,
+                pady=12,
+                highlightbackground="#e0e7ef",
+                highlightthickness=1,
+            )
+            card.pack(fill=tk.X, pady=6)
+            row_inner = tk.Frame(card, bg=bg)
+            row_inner.pack(fill=tk.X)
+            text_col = tk.Frame(row_inner, bg=bg)
+            text_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+            tk.Label(text_col, text=title, font=(_df, 11, "bold"), bg=bg, fg="#263238").pack(anchor=tk.W)
+            tk.Label(text_col, text=desc, font=(_df, 9), bg=bg, fg="#78909c").pack(anchor=tk.W)
+            btn_col = tk.Frame(row_inner, bg=bg)
+            btn_col.pack(side=tk.RIGHT)
+            _primary_btn(
+                btn_col,
+                "実行",
+                lambda e=exec_type: self._on_data_import_selected(e, dialog),
+            ).pack(side=tk.RIGHT, padx=(6, 0))
+            _secondary_btn(
+                btn_col,
+                "一括削除",
+                lambda c=cancel_type: self._on_data_import_selected(c, dialog),
+            ).pack(side=tk.RIGHT, padx=(6, 0))
+            if show_template:
+                _secondary_btn(
+                    btn_col,
+                    "テンプレートを出力",
+                    lambda: prompt_save_bulk_cow_registration_template(parent=dialog),
+                ).pack(side=tk.RIGHT, padx=(6, 0))
+
+        sep = ttk.Separator(dialog, orient=tk.HORIZONTAL)
+        sep.pack(fill=tk.X, padx=24, pady=(8, 0))
+
+        footer = tk.Frame(dialog, bg=bg, pady=16, padx=24)
+        footer.pack(fill=tk.X)
+        _secondary_btn(footer, "閉じる", _close_data_import).pack(side=tk.LEFT)
+
+        self._register_window("data_import", dialog, "データ吸い込み")
 
     def _unified_dialog_icon_font(self):
-        """記号が表示されるアイコン用フォント。Meiryo UI に統一（Segoe UI Symbol は Tk で未描画時に '--' になることがあるため）。"""
+        """絵文字・アイコン用フォント。Meiryo UI は絵文字グリフを持たないため Windows では Segoe UI Emoji を使う。"""
+        if platform.system() == "Windows":
+            return ("Segoe UI Emoji", 22)
         return ("Meiryo UI", 22)
 
     def _build_unified_dialog_header(self, dialog: tk.Toplevel, icon_char: str, title_text: str, subtitle_text: str):
@@ -1498,7 +1887,13 @@ class MainWindow(
         header = tk.Frame(dialog, bg=bg, pady=20, padx=24)
         header.pack(fill=tk.X)
         icon_font = self._unified_dialog_icon_font()
-        tk.Label(header, text=icon_char, font=(icon_font[0], 24), bg=bg, fg="#3949ab").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(
+            header,
+            text=icon_char,
+            font=(icon_font[0], 24),
+            bg=bg,
+            fg="#3949ab",
+        ).pack(side=tk.LEFT, padx=(0, 10))
         title_frame = tk.Frame(header, bg=bg)
         title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Label(title_frame, text=title_text, font=(_df, 16, "bold"), bg=bg, fg="#263238").pack(anchor=tk.W)
@@ -1512,15 +1907,16 @@ class MainWindow(
         card_pad = 16
         btn_primary_bg = "#3949ab"
         btn_primary_fg = "#ffffff"
-        icon_cell_width = 40  # 全カードでアイコン幅を統一して左揃え
+        icon_cell_width = 44  # 絵文字（Segoe UI Emoji）が切れないよう少し広めに
         card = tk.Frame(parent, bg=card_bg, padx=card_pad, pady=card_pad,
                         highlightbackground="#e0e7ef", highlightthickness=1)
         card.pack(fill=tk.X, pady=6, padx=24)
-        icon_frame = tk.Frame(card, bg=card_bg, width=icon_cell_width)
-        icon_frame.pack(side=tk.LEFT, padx=(0, 14), pady=4)
-        icon_frame.pack_propagate(False)
-        icon_font = self._unified_dialog_icon_font()
-        tk.Label(icon_frame, text=icon_char, font=icon_font, bg=card_bg, fg="#3949ab").pack(anchor=tk.W)
+        if icon_char:
+            icon_frame = tk.Frame(card, bg=card_bg, width=icon_cell_width)
+            icon_frame.pack(side=tk.LEFT, padx=(0, 14), pady=4)
+            icon_frame.pack_propagate(False)
+            icon_font = self._unified_dialog_icon_font()
+            tk.Label(icon_frame, text=icon_char, font=icon_font, bg=card_bg, fg="#3949ab").pack(anchor=tk.W)
         text_frame = tk.Frame(card, bg=card_bg)
         text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tk.Label(text_frame, text=title_text, font=(_df, 11, "bold"), bg=card_bg, fg="#263238").pack(anchor=tk.W)
@@ -1531,21 +1927,15 @@ class MainWindow(
         btn.pack(side=tk.RIGHT, padx=(10, 0))
 
     def _build_milk_test_report_card(self, parent: tk.Frame):
-        """乳検レポート用カード"""
+        """乳検レポート用カード（行左のアイコンは表示しない。絵文字は環境によって欠けるため）"""
         _df = "Meiryo UI"
         card_bg = "#f5f5f5"
         card_pad = 16
         btn_primary_bg = "#3949ab"
         btn_primary_fg = "#ffffff"
-        icon_cell_width = 40
         card = tk.Frame(parent, bg=card_bg, padx=card_pad, pady=card_pad,
                         highlightbackground="#e0e7ef", highlightthickness=1)
         card.pack(fill=tk.X, pady=6, padx=24)
-        icon_frame = tk.Frame(card, bg=card_bg, width=icon_cell_width)
-        icon_frame.pack(side=tk.LEFT, padx=(0, 14), pady=4)
-        icon_frame.pack_propagate(False)
-        icon_font = self._unified_dialog_icon_font()
-        tk.Label(icon_frame, text="", font=icon_font, bg=card_bg, fg="#3949ab").pack(anchor=tk.W)
         text_frame = tk.Frame(card, bg=card_bg)
         text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tk.Label(text_frame, text="乳検レポート", font=(_df, 11, "bold"), bg=card_bg, fg="#263238").pack(anchor=tk.W)
@@ -1562,13 +1952,13 @@ class MainWindow(
         btn_secondary_bg = "#fafafa"
         btn_secondary_fg = "#546e7a"
         btn_secondary_bd = "#b0bec5"
-        footer = tk.Frame(dialog, bg="#f5f5f5", pady=20)
+        footer = tk.Frame(dialog, bg="#f5f5f5", pady=18, padx=24)
         footer.pack(fill=tk.X)
         cmd = on_close if on_close else dialog.destroy
         tk.Button(footer, text="閉じる", font=(_df, 10), bg=btn_secondary_bg, fg=btn_secondary_fg,
                  activebackground="#eceff1", relief=tk.FLAT, padx=24, pady=10,
                  highlightbackground=btn_secondary_bd, highlightthickness=1, cursor="hand2",
-                 command=cmd).pack()
+                 command=cmd).pack(anchor=tk.W)
     
     def _on_data_import_selected(self, import_type: str, dialog: tk.Toplevel):
         """データ吸い込みタイプが選択されたときの処理"""
@@ -2163,9 +2553,9 @@ class MainWindow(
             return
         dialog = tk.Toplevel(self.root)
         dialog.title("データ出力")
-        dialog.geometry("520x380")
+        dialog.geometry("720x560")
         dialog.configure(bg="#f5f5f5")
-        dialog.minsize(480, 320)
+        dialog.minsize(640, 480)
         self._data_output_dialog = dialog
 
         def _close_data_output():
@@ -2179,9 +2569,43 @@ class MainWindow(
         self._build_unified_dialog_header(dialog, "\u2b06\ufe0f", "データ出力", "出力するレポートを選択してください")
         content = tk.Frame(dialog, bg="#f5f5f5", padx=0, pady=8)
         content.pack(fill=tk.BOTH, expand=True)
-        self._build_unified_dialog_card(content, "\U0001f95b", "乳検", "乳検レポートを出力します", "実行",
+        self._build_unified_dialog_card(content, "", "FALCONイベントデータ", "期間・イベント種類を指定してCSV出力します", "実行",
+                                        self._on_falcon_event_data_output)
+        self._build_unified_dialog_card(content, "", "乳検データ", "乳検データを表示してCSV保存できます", "実行",
                                         lambda: self._on_milk_test_report(dialog))
+        self._build_unified_dialog_card(content, "", "ゲノムデータ", "期間を指定してゲノムCSVを出力します", "実行",
+                                        self._on_genome_data_output)
         self._build_unified_dialog_footer(dialog, on_close=_close_data_output)
+
+    def _on_falcon_event_data_output(self):
+        """FALCONイベントデータ出力ウィンドウを開く。"""
+        try:
+            from ui.data_export_window import DataExportWindow
+            win = DataExportWindow(
+                parent=self.root,
+                db_handler=self.db,
+                event_dictionary_path=self.event_dict_path,
+                mode="falcon_events",
+            )
+            win.show()
+        except Exception as e:
+            logging.error(f"FALCONイベントデータ出力起動エラー: {e}", exc_info=True)
+            messagebox.showerror("エラー", f"FALCONイベントデータ出力の起動に失敗しました:\n{e}")
+
+    def _on_genome_data_output(self):
+        """ゲノムデータ出力ウィンドウを開く。"""
+        try:
+            from ui.data_export_window import DataExportWindow
+            win = DataExportWindow(
+                parent=self.root,
+                db_handler=self.db,
+                event_dictionary_path=self.event_dict_path,
+                mode="genome",
+            )
+            win.show()
+        except Exception as e:
+            logging.error(f"ゲノムデータ出力起動エラー: {e}", exc_info=True)
+            messagebox.showerror("エラー", f"ゲノムデータ出力の起動に失敗しました:\n{e}")
 
     def _on_report_builder(self):
         """レポート作成メニューをクリック（吸い込みウィンドウと同一デザイン）。既に開いていれば前面に表示。"""
@@ -2711,7 +3135,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                                         lambda: self._on_event_dictionary(dialog))
         self._build_unified_dialog_card(content, "", "コマンド辞書", "コマンドの辞書を編集します", "開く",
                                         lambda: self._on_command_dictionary(dialog))
-        self._build_unified_dialog_card(content, "", "項目辞書", "項目の辞書を編集します", "開く",
+        self._build_unified_dialog_card(content, "", "項目辞書", "項目の定義を参照します", "開く",
                                         lambda: self._on_item_dictionary(dialog))
         self._build_unified_dialog_card(content, "", "SIRE一覧", "SIRE一覧と種別を設定します", "開く",
                                         lambda: self._on_sire_list(dialog))
@@ -2719,6 +3143,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                                         lambda: self._on_farm_settings(dialog))
         self._build_unified_dialog_card(content, "", "バックアップ設定", "バックアップの間隔と保存先を設定します", "開く",
                                         lambda: self._on_backup_settings(dialog))
+        self._build_unified_dialog_card(content, "", "使用説明書", "操作手順や機能の説明をブラウザで表示します", "開く",
+                                        lambda: self._on_usage_manual())
         self._build_unified_dialog_footer(dialog, on_close=_close_dictionary_settings)
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
@@ -2736,8 +3162,11 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                 pass
         self._usage_manual_dialog = None
 
-        repo_root = Path(__file__).resolve().parents[2]
-        manual_path = repo_root / "docs" / "使用説明書.md"
+        from constants import FALCON_ROOT, APP_ROOT
+        # EXE時: docs/ はバンドル内(APP_ROOT)に含まれる想定。なければEXE隣(FALCON_ROOT)も探す
+        manual_path = APP_ROOT / "docs" / "使用説明書.md"
+        if not manual_path.exists():
+            manual_path = FALCON_ROOT / "docs" / "使用説明書.md"
         if not manual_path.exists():
             messagebox.showerror("エラー", f"使用説明書が見つかりません: {manual_path}")
             return
@@ -3620,9 +4049,9 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
 
             # 初産成績（DIM100以内 & 目標乳量以下）
             heifer_under_rows = []
-            heifer_scatter_points: List[Tuple[int, float]] = []
+            heifer_scatter_points: List[Tuple[int, float, str]] = []
             parous_under_rows = []
-            parous_scatter_points: List[Tuple[int, float]] = []
+            parous_scatter_points: List[Tuple[int, float, str]] = []
             for event in target_events:
                 cow_auto_id = event.get("cow_auto_id")
                 if not cow_auto_id:
@@ -3651,16 +4080,15 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     milk_num = None
                 if milk_num is None:
                     continue
+                cow_id = cow.get("cow_id", "") if cow else ""
+                jpn10 = cow.get("jpn10", "") if cow else ""
                 if lact == 1:
-                    heifer_scatter_points.append((dim, milk_num))
+                    heifer_scatter_points.append((dim, milk_num, str(cow_id)))
                 elif lact is not None and lact >= 2:
-                    parous_scatter_points.append((dim, milk_num))
+                    parous_scatter_points.append((dim, milk_num, str(cow_id)))
 
                 if dim > 100:
                     continue
-
-                cow_id = cow.get("cow_id", "") if cow else ""
-                jpn10 = cow.get("jpn10", "") if cow else ""
                 scc_value = json_data.get("scc")
                 fat_value = json_data.get("fat")
                 bhb_value = json_data.get("bhb")
@@ -4966,7 +5394,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         svg_parts.append("</svg>")
         return "".join(svg_parts)
 
-    def _build_heifer_milk_scatter_svg(self, points: List[Tuple[int, float]], target_milk: float) -> str:
+    def _build_heifer_milk_scatter_svg(self, points: List[Tuple[int, float, str]], target_milk: float) -> str:
         if not points:
             return '<div class="subnote">データなし</div>'
 
@@ -5028,15 +5456,26 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             f'stroke="#e74c3c" stroke-width="2" />'
         )
 
-        # データ点
-        for dim, milk in points:
+        # データ点（赤枠内: 赤、その他: 青）
+        target_dim = 100
+        for dim, milk, cow_id in points:
             if dim < 0 or milk < 0:
                 continue
             dim_clamped = min(dim, max_dim)
             milk_clamped = min(milk, max_milk)
             x = margin_left + (dim_clamped / max_dim) * plot_width
             y = margin_top + plot_height - (milk_clamped / max_milk) * plot_height
-            svg_parts.append(f'<circle cx="{x}" cy="{y}" r="2.5" fill="#1f77b4"></circle>')
+            in_target = (dim <= target_dim and milk <= target_milk)
+            if in_target:
+                svg_parts.append(f'<circle cx="{x}" cy="{y}" r="3.2" fill="#d32f2f" stroke="#b71c1c" stroke-width="0.4"></circle>')
+                if cow_id:
+                    safe_cow_id = html.escape(str(cow_id))
+                    svg_parts.append(
+                        f'<text x="{x + 4}" y="{y - 4}" font-size="9.5" fill="#b71c1c" '
+                        f'font-weight="700" stroke="white" stroke-width="1.6" paint-order="stroke">{safe_cow_id}</text>'
+                    )
+            else:
+                svg_parts.append(f'<circle cx="{x}" cy="{y}" r="2.5" fill="#1f77b4" opacity="0.85"></circle>')
 
         # 軸ラベル
         svg_parts.append(
@@ -5202,8 +5641,6 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         item_window = ItemDictionaryWindow(
             parent=self.root,
             item_dictionary_path=self.item_dict_path,
-            on_item_updated=self._on_item_dictionary_changed,
-            formula_engine=self.formula_engine,
         )
         item_window.show()
 
@@ -5266,25 +5703,6 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         else:
             self.command_dictionary = {}
     
-    def _on_item_dictionary_changed(self):
-        """項目辞書更新後のハンドラ（FormulaEngineを再読込し、表示を更新）"""
-        try:
-            # item_dictionaryを再読み込み
-            self._load_item_dictionary()
-            
-            if self.formula_engine:
-                self.formula_engine.reload_item_dictionary()
-        except Exception as e:
-            logging.error(f"item_dictionary reload failed: {e}")
-        
-        # CowCardを再描画
-        if self.current_view_type == 'cow_card' and self.current_cow_card and self.current_cow_auto_id:
-            try:
-                self.current_cow_card.load_cow(self.current_cow_auto_id)
-                self._add_chat_message("システム", "項目辞書の更新を反映しました。")
-            except Exception as e:
-                logging.error(f"CowCard refresh failed after item_dictionary update: {e}")
-    
     def _on_farm_settings(self, parent_dialog):
         """農場設定ボタンをクリック"""
         parent_dialog.destroy()  # 選択ダイアログを閉じる
@@ -5319,10 +5737,20 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             """農場が変更された時のコールバック"""
             self._switch_farm(farm_path)
 
+        def on_farm_name_changed(new_name: str):
+            """現在農場の表示名変更時に、タイトル表示を即時更新"""
+            try:
+                self.root.title(f"FALCON2：{new_name}")
+                if getattr(self, "_main_farm_name_label", None) is not None:
+                    self._main_farm_name_label.config(text=new_name)
+            except Exception:
+                logging.exception("農場名表示の更新に失敗しました")
+
         farm_management_window = FarmManagementWindow(
             parent=self.root,
             current_farm_path=self.farm_path,
-            on_farm_changed=on_farm_changed
+            on_farm_changed=on_farm_changed,
+            on_farm_name_changed=on_farm_name_changed
         )
         self._farm_management_window = farm_management_window
         self._register_window('farm_management', farm_management_window.window, '農場管理')
@@ -5363,17 +5791,9 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             self.db = DBHandler(db_path)
             
             # 項目辞書・イベント辞書は本体のみのためパスは変更しない
-            # コマンド辞書は農場ごとのため、切り替え先農場のパスに更新
-            app_root = Path(__file__).parent.parent.parent
-            config_default = app_root / "config_default"
-            farm_command_dict = new_farm_path / "command_dictionary.json"
-            default_command_dict = config_default / "command_dictionary.json"
-            if farm_command_dict.exists():
-                self.command_dict_path = farm_command_dict
-            elif default_command_dict.exists():
-                self.command_dict_path = default_command_dict
-            else:
-                self.command_dict_path = None
+            # コマンド辞書は本体（config_default）を使用
+            default_command_dict = CONFIG_DEFAULT_DIR / "command_dictionary.json"
+            self.command_dict_path = default_command_dict if default_command_dict.exists() else None
             self._load_command_dictionary()
             
             # FormulaEngineを再初期化（項目辞書は本体のまま）
@@ -5401,11 +5821,10 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             self.current_view_type = None
             
             # QueryRouter/QueryRendererを再初期化
-            normalization_dir = Path(__file__).parent.parent.parent / "normalization"
             from modules.query_router import QueryRouter
-            
+
             self.query_router = QueryRouter(
-                normalization_dir=normalization_dir,
+                normalization_dir=NORMALIZATION_DIR,
                 item_dictionary_path=self.item_dict_path,
                 event_dictionary_path=self.event_dict_path
             )
@@ -5479,7 +5898,99 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             "設定変更",
             "フォント設定を変更しました。\n完全に反映するにはアプリを再起動してください。"
         )
-    
+
+    def _on_about(self):
+        """バージョン情報ダイアログを表示"""
+        import builtins
+        from constants import APP_VERSION
+        from ui.license_window import LicenseActivationWindow, SUPPORT_CONTACT
+        from modules.license_manager import LicenseStatus
+
+        _lic = getattr(builtins, "_falcon_license", None)
+        if _lic:
+            lic_summary = _lic.summary()
+        else:
+            lic_summary = "（不明）"
+
+        _FONT = "Meiryo UI"
+        _NAVY = "#1e2a3a"
+        _BG   = "#f5f6fa"
+        _TEXT = "#1c2333"
+        _TEXT_S = "#6b7280"
+
+        win = tk.Toplevel(self.root)
+        win.title("バージョン情報")
+        win.geometry("420x320")
+        win.resizable(False, False)
+        win.configure(bg=_BG)
+        win.transient(self.root)
+        win.grab_set()
+
+        # ヘッダー
+        header = tk.Frame(win, bg=_NAVY, height=72)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        tk.Label(header, text="FALCON2", font=(_FONT, 18, "bold"),
+                 bg=_NAVY, fg="white").place(relx=0.5, rely=0.38, anchor=tk.CENTER)
+        tk.Label(header, text="牛群管理システム",
+                 font=(_FONT, 9), bg=_NAVY, fg="#c5cae9").place(relx=0.5, rely=0.75, anchor=tk.CENTER)
+
+        body = tk.Frame(win, bg=_BG, padx=28, pady=18)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # バージョン
+        row1 = tk.Frame(body, bg=_BG)
+        row1.pack(fill=tk.X, pady=2)
+        tk.Label(row1, text="バージョン:", width=14, anchor=tk.W,
+                 font=(_FONT, 9, "bold"), bg=_BG, fg=_TEXT).pack(side=tk.LEFT)
+        tk.Label(row1, text=f"v{APP_VERSION}",
+                 font=(_FONT, 9), bg=_BG, fg=_TEXT_S).pack(side=tk.LEFT)
+
+        # ライセンス状態
+        row2 = tk.Frame(body, bg=_BG)
+        row2.pack(fill=tk.X, pady=2)
+        tk.Label(row2, text="ライセンス:", width=14, anchor=tk.W,
+                 font=(_FONT, 9, "bold"), bg=_BG, fg=_TEXT).pack(side=tk.LEFT)
+        tk.Label(row2, text=lic_summary, wraplength=250, justify=tk.LEFT,
+                 font=(_FONT, 9), bg=_BG, fg=_TEXT_S).pack(side=tk.LEFT)
+
+        # サポート連絡先
+        row3 = tk.Frame(body, bg=_BG)
+        row3.pack(fill=tk.X, pady=(10, 2))
+        tk.Label(row3, text="サポート:", width=14, anchor=tk.W,
+                 font=(_FONT, 9, "bold"), bg=_BG, fg=_TEXT).pack(side=tk.LEFT)
+        tk.Label(row3, text=SUPPORT_CONTACT,
+                 font=(_FONT, 9), bg=_BG, fg=_TEXT_S).pack(side=tk.LEFT)
+
+        btn_frame = tk.Frame(body, bg=_BG)
+        btn_frame.pack(fill=tk.X, pady=(16, 0))
+
+        # ライセンス入力ボタン（試用中・期限切れのみ表示）
+        if _lic and _lic.status in (LicenseStatus.TRIAL_ACTIVE, LicenseStatus.TRIAL_EXPIRED,
+                                    LicenseStatus.LICENSE_EXPIRED):
+            def _open_activation():
+                win.destroy()
+                LicenseActivationWindow(self.root, allow_close=True, info=_lic)
+            tk.Button(
+                btn_frame, text="ライセンスを入力する",
+                font=(_FONT, 9), relief=tk.FLAT,
+                bg=_NAVY, fg="white", cursor="hand2", padx=14, pady=6,
+                command=_open_activation
+            ).pack(side=tk.LEFT)
+
+        tk.Button(
+            btn_frame, text="閉じる",
+            font=(_FONT, 9), relief=tk.FLAT,
+            bg="#dde1e7", fg=_TEXT, cursor="hand2", padx=14, pady=6,
+            command=win.destroy
+        ).pack(side=tk.RIGHT)
+
+        win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width()  - win.winfo_width())  // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - win.winfo_height()) // 2
+        win.geometry(f"+{x}+{y}")
+        win.wait_window()
+
     def _on_event_saved(self, cow_auto_id: int):
         """
         イベント保存後に現在のViewを更新するコールバック
@@ -5918,7 +6429,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         canvas.configure(yscrollcommand=scrollbar.set)
         
         # イベント辞書からイベント一覧を取得
-        event_dict_path = Path(__file__).parent.parent.parent / "config_default" / "event_dictionary.json"
+        event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         events_list = []
         if event_dict_path.exists():
             with open(event_dict_path, 'r', encoding='utf-8') as f:
@@ -6650,7 +7161,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             p = Path(self.event_dict_path) if not isinstance(self.event_dict_path, Path) else self.event_dict_path
             paths_to_try.append(p)
         if not paths_to_try:
-            paths_to_try.append(Path(__file__).resolve().parent.parent / "config_default" / "event_dictionary.json")
+            paths_to_try.append(CONFIG_DEFAULT_DIR / "event_dictionary.json")
         for path in paths_to_try:
             path = Path(path) if not isinstance(path, Path) else path
             if not path.exists():
@@ -6688,8 +7199,18 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
     
     def _on_command_type_selected(self, event=None):
         """コマンドタイプが選択された時（command_entry用）"""
+        prev_type = getattr(self, "_previous_command_type", "")
         selected_type = self.command_type_var.get()
-        
+        # タイプ用ホバーアシストがドロップダウン操作後も残るのを防ぐ
+        try:
+            from ui.assist_tooltip import dismiss_active_tooltip
+            dismiss_active_tooltip()
+            tt = getattr(self, "_assist_tooltip_command_type", None)
+            if tt is not None:
+                tt._hide()
+        except Exception:
+            pass
+
         if selected_type != "イベントリスト":
             # イベントリスト固定の「all」設定を解除し、通常の履歴プルダウンに戻す
             if hasattr(self, 'command_entry') and self.command_entry.winfo_exists():
@@ -6748,6 +7269,12 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # 条件入力欄を非表示
             if hasattr(self, 'condition_frame'):
                 self.condition_frame.pack_forget()
+            # 妊娠率用フレーム（VWP 等）は必ず非表示（タイプ切替後に残さない）
+            if hasattr(self, 'pregnancy_rate_frame'):
+                self.pregnancy_rate_frame.pack_forget()
+            # 妊娠率実行直後に受胎率へ切り替えたとき、表・コマンド行の名残を消す
+            if prev_type in ("妊娠率", "妊娠率（DIM）"):
+                self._clear_result_display()
 
             # コマンド入力欄を無効化（記入できないようにする）
             if hasattr(self, 'command_entry') and self.command_entry.winfo_exists():
@@ -7174,7 +7701,94 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     self.command_entry.set("")
                 self.command_entry.config(foreground="black")
                 self.command_placeholder_shown = False
-    
+
+        # 次回のタイプ切替判定用（妊娠率→受胎率など）
+        self._previous_command_type = selected_type
+
+        # タイプ選択後にステップガイドを表示
+        self.root.after(150, lambda t=selected_type: self._show_assist_step_guide(t))
+
+    def _show_assist_step_guide(self, selected_type: str):
+        """タイプ選択後に次のステップをガイドするツールチップを一時表示"""
+        try:
+            from ui import assist_tooltip as at
+            if not at.is_assist_enabled():
+                return
+        except Exception:
+            return
+
+        GUIDES = {
+            "妊娠率": (
+                "pregnancy_rate_vwp_entry",
+                "妊娠率の設定",
+                "VWP（自発待機期間）を確認してください。\n"
+                "デフォルトは50日です。\n\n"
+                "次に「実行」で計算できます（期間は自動設定済み）。",
+                "→ VWPを確認したら「実行」ボタンを押してください",
+            ),
+            "妊娠率（DIM）": (
+                "pregnancy_rate_vwp_entry",
+                "妊娠率（DIM別）の設定",
+                "DIM（分娩後日数）帯別の妊娠率を表示します。\n"
+                "VWPを確認して「実行」を押してください。",
+                "→ 「実行」で DIM別グラフが表示されます",
+            ),
+            "受胎率（経産）": (
+                "conception_rate_type_entry",
+                "受胎率の集計軸を選択",
+                "月別・産次別など、どの軸で集計するかを選んでください。\n\n"
+                "未選択でも実行すると全体の受胎率が表示されます。",
+                "→ 「実行」で受胎率を計算します",
+            ),
+            "受胎率（未経産）": (
+                "conception_rate_type_entry",
+                "受胎率（未経産）の集計軸を選択",
+                "月別・授精回数別などで集計できます。\n\n"
+                "未選択でも実行すると全体の受胎率が表示されます。",
+                "→ 「実行」で受胎率を計算します",
+            ),
+            "リスト": (
+                "command_entry",
+                "表示したい項目を入力",
+                "見たい項目を日本語で入力します。\n\n"
+                "例: ID、産次、DIM、産乳量\n\n"
+                "「項目一覧を表示」で使える項目を確認できます。",
+                "→ 「条件」で絞り込み後、Enterで実行",
+            ),
+            "集計（経産牛）": (
+                "classification_entry",
+                "分類（グループ分けの軸）を選択",
+                "集計結果をどのグループで分けるかを選択します。\n\n"
+                "例: 産次 → 産次別平均を表示\n"
+                "　　分娩月 → 月別推移を表示\n\n"
+                "未選択は全体の平均のみ",
+                "→ 分類を選んだら「実行」",
+            ),
+            "グラフ": (
+                "graph_type_entry",
+                "グラフの種類を選択",
+                "散布図: X軸・Y軸に項目を指定してプロット\n"
+                "空胎日数生存曲線: 受胎までの生存分析",
+                "→ グラフ種類を選ぶと入力欄が現れます",
+            ),
+        }
+
+        if selected_type not in GUIDES:
+            return
+
+        widget_name, title, body, hint = GUIDES[selected_type]
+        widget = getattr(self, widget_name, None)
+        if widget is None:
+            return
+        try:
+            if not widget.winfo_exists():
+                return
+        except Exception:
+            return
+
+        tip = at.FalconTooltip(widget, title, body, hint)
+        tip.show_briefly(4000)
+
     def _on_command_type_selected_text(self, event=None):
         """コマンドタイプが選択された時（command_text用）"""
         # タイプ選択時はプレフィックスを表示しない（実行時に自動付与）
@@ -7348,7 +7962,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         if hasattr(self, 'event_dict_path') and self.event_dict_path:
             paths_to_try.append(Path(self.event_dict_path) if not isinstance(self.event_dict_path, Path) else self.event_dict_path)
         if not paths_to_try:
-            paths_to_try.append(Path(__file__).resolve().parent.parent / "config_default" / "event_dictionary.json")
+            paths_to_try.append(CONFIG_DEFAULT_DIR / "event_dictionary.json")
         for path in paths_to_try:
             path = Path(path) if not isinstance(path, Path) else path
             if not path.exists():
@@ -9236,7 +9850,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             logging.info(f"イベントリスト: ユニーク化後件数={len(events)}")
             
             # イベント辞書を読み込んでイベントタイプ名を取得
-            event_dict_path = Path(__file__).parent.parent.parent / "config_default" / "event_dictionary.json"
+            event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
             event_dict = {}
             if event_dict_path.exists():
                 with open(event_dict_path, 'r', encoding='utf-8') as f:
@@ -9512,7 +10126,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                 return
             
             # イベント辞書を読み込んでイベントタイプ名を取得
-            event_dict_path = Path(__file__).parent.parent.parent / "config_default" / "event_dictionary.json"
+            event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
             event_dict = {}
             if event_dict_path.exists():
                 with open(event_dict_path, 'r', encoding='utf-8') as f:
@@ -11876,7 +12490,16 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # カラム幅は後で調整（初期値として設定、stretch=Falseで拡大しない）
             # 数値列は右揃え、それ以外は左揃え
             # 受胎率の表の数値列を判定
-            numeric_columns = ["受胎率", "受胎", "不受胎", "その他", "総数", "％全授精", "合計"]
+            numeric_columns = [
+                "受胎率", "受胎", "不受胎", "その他", "総数", "％全授精", "合計",
+                # 妊娠率（21日PR）表
+                "開始日", "終了日",
+                "繁殖対象", "授精", "授精率%", "妊娠対象", "妊娠", "妊娠率%", "受胎率%", "損耗",
+                # 受胎率表の左端分類列（rate_type の全パターン）
+                "月", "産次", "授精回数", "DIMサイクル", "授精間隔", "授精種類", "授精師", "SIRE",
+                # DIM別妊娠率表
+                "DIMレンジ",
+            ]
             # イベント集計の表の場合、分類値の列（数値）も右揃えにする
             is_event_aggregate = hasattr(self, 'event_aggregate_metadata') and self.event_aggregate_metadata is not None
             if is_event_aggregate:
@@ -11913,8 +12536,6 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             self.result_treeview.bind("<Double-Button-1>", self._on_multi_item_aggregate_cell_double_click)
         else:
             self.result_treeview.bind("<Double-Button-1>", self._on_list_row_double_click)
-            # リストの行をクリック（シングルクリック）でも個体カードを開く（add='+' で既定の行選択も維持）
-            self.result_treeview.bind("<Button-1>", self._on_list_row_click, add='+')
     
     def _adjust_column_widths(self, columns: List[str], rows: List):
         """
@@ -11988,7 +12609,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         if not hasattr(self, 'result_treeview'):
             logging.error("result_treeviewが初期化されていません")
             return
-        
+
         # コマンド情報を保存
         if command:
             self.current_table_command = command
@@ -12025,11 +12646,33 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         self.result_treeview['columns'] = columns
         self.result_treeview['show'] = 'headings'
         
+        # 数値列名パターン（右揃え対象）
+        _numeric_col_keywords = [
+            "頭数", "平均", "合計", "最小", "最大", "中央値", "標準偏差",
+            "%", "率", "日数", "回数", "産次", "DIM", "LACT",
+        ]
+
+        def _is_numeric_col(col_name: str, sample_rows: List) -> bool:
+            """列名またはデータ値から数値列かどうかを判定"""
+            if any(kw in col_name for kw in _numeric_col_keywords):
+                return True
+            # 最初の非空行のデータが数値かどうか確認
+            for r in sample_rows[:5]:
+                val = r.get(col_name, "") if isinstance(r, dict) else ""
+                if val is None or val == "":
+                    continue
+                try:
+                    float(str(val).replace(",", ""))
+                    return True
+                except (ValueError, TypeError):
+                    return False
+            return False
+
         # 各カラムの設定
         for col in columns:
             self.result_treeview.heading(col, text=col, command=lambda c=col: self._on_column_header_click(c))
-            # カラム幅は後で調整（初期値として設定）
-            self.result_treeview.column(col, width=120, anchor=tk.W, minwidth=80, stretch=False)
+            anchor = tk.E if _is_numeric_col(col, rows) else tk.W
+            self.result_treeview.column(col, width=120, anchor=anchor, minwidth=80, stretch=False)
         
         # 既存のデータをクリア
         for item in self.result_treeview.get_children():
@@ -12308,8 +12951,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             # グラフを作成
             ax = figure.add_subplot(111)
             
-            # 棒グラフを作成（Rのようなスタイル）
-            bars = ax.bar(range(len(x_labels)), y_values, color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
+            # 棒グラフ（受胎率グラフと同一スタイル）
+            bars = ax.bar(range(len(x_labels)), y_values, **FALCON_BAR_CHART_KW)
             
             # X軸のラベルに頭数を追加（例：1 (N=19)）
             x_labels_with_n = []
@@ -12321,13 +12964,22 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             ax.set_xticks(range(len(x_labels)))
             ax.set_xticklabels(x_labels_with_n, rotation=0, ha='center')
             
-            # ラベルとタイトルを設定
-            ax.set_xlabel(classification, fontsize=11, fontweight='bold')
-            ax.set_ylabel(f"{aggregate_item_name}平均", fontsize=11, fontweight='bold')
-            ax.set_title(f"{aggregate_item_name}平均 × {classification}", fontsize=12, fontweight='bold', pad=15)
-            
-            # グリッドを追加（Rのようなスタイル）
-            ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+            ax.set_xlabel(
+                classification,
+                fontsize=FALCON_BAR_CHART_AXIS_LABEL_FS,
+                fontweight="bold",
+            )
+            ax.set_ylabel(
+                f"{aggregate_item_name}平均",
+                fontsize=FALCON_BAR_CHART_AXIS_LABEL_FS,
+                fontweight="bold",
+            )
+            ax.set_title(
+                f"{aggregate_item_name}平均 × {classification}",
+                **FALCON_BAR_CHART_TITLE_KW,
+            )
+
+            ax.grid(True, **FALCON_BAR_CHART_GRID_KW)
             ax.set_axisbelow(True)
             
             # Y軸の範囲を調整（マイナス値がある場合はデータ範囲に合わせる）
@@ -12339,12 +12991,16 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
             else:
                 ax.set_ylim(max(0, y_min - y_range * 0.1), y_max + y_range * 0.1)
             
-            # 各棒の上に値を表示（オプション）
             for i, (bar, value) in enumerate(zip(bars, y_values)):
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2., height,
-                       f'{value:.1f}',
-                       ha='center', va='bottom', fontsize=9)
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f"{value:.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=FALCON_BAR_CHART_VALUE_FS,
+                )
             
             # レイアウトを調整
             figure.tight_layout()
@@ -13477,11 +14133,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     auto_id_str = values[-1] if len(values) > len(columns) else None
                     if auto_id_str:
                         auto_id = int(auto_id_str)
-                        cow = self.db.get_cow_by_auto_id(auto_id)
-                        if cow:
-                            cow_id = cow.get('cow_id', '')
-                            self._jump_to_cow_card(cow_id)
-                            list_window.destroy()
+                        # 個体カード起動は共通化（参照保持あり）
+                        self._open_cow_card_as_toplevel(auto_id)
                 except (ValueError, TypeError, IndexError) as e:
                     logging.error(f"[集計] 個体カード表示エラー: {e}")
         
@@ -13936,26 +14589,129 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
         return False
     
     def _on_list_row_double_click(self, event):
-        """リスト結果の行をダブルクリックした時の処理（個体カードを開く）"""
+        """リスト結果の行をダブルクリックした時の処理（個体カードを別ウィンドウで開く）"""
         item = self.result_treeview.identify_row(event.y)
         if not item:
             return
         self.result_treeview.selection_set(item)
         self.result_treeview.focus(item)
-        self._open_cow_card_for_list_item(item)
-    
-    def _on_list_row_click(self, event):
-        """リスト結果の行をクリックした時の処理（セルクリック時のみ個体カードを開く）"""
-        region = self.result_treeview.identify_region(event.x, event.y)
-        # ヘッダー以外（セルまたはその他）のクリックで個体カードを開く
-        if region == "heading":
+        self._open_cow_card_window_for_list_item(item)
+
+    def _open_cow_card_window_for_list_item(self, item: str) -> None:
+        """
+        リスト結果の行（treeview item）から cow_auto_id を特定し、
+        個体カードを別ウィンドウ（Toplevel）として開く。
+        """
+        if not item or not hasattr(self, 'result_treeview') or not self.result_treeview.exists(item):
             return
-        item = self.result_treeview.identify_row(event.y)
-        if not item:
+        tree = self.result_treeview
+        values = tree.item(item, 'values')
+        columns = list(tree['columns'])
+        cow_auto_id = None
+
+        # 1) ID 列から直接 jump
+        for id_col in ('ID', '個体ID'):
+            if id_col in columns:
+                id_idx = columns.index(id_col)
+                if id_idx < len(values) and values[id_idx] not in (None, ''):
+                    cow_id_str = str(values[id_idx]).strip()
+                    try:
+                        padded = cow_id_str.zfill(4) if cow_id_str.isdigit() else cow_id_str
+                        cow = self.db.get_cow_by_id(padded)
+                        if cow:
+                            cow_auto_id = cow.get('auto_id')
+                    except Exception:
+                        pass
+                    break
+
+        # 2) タグから table_original_rows を参照
+        if cow_auto_id is None:
+            tags = tree.item(item, 'tags')
+            if tags and hasattr(self, 'table_original_rows') and self.table_original_rows:
+                try:
+                    tag_str = tags[0] if isinstance(tags[0], str) else str(tags[0])
+                    row_index_str = tag_str.replace("row_", "").strip()
+                    if row_index_str.isdigit():
+                        row_index = int(row_index_str)
+                        if 0 <= row_index < len(self.table_original_rows):
+                            row_data = self.table_original_rows[row_index]
+                            cow_auto_id = row_data.get('auto_id')
+                            if not cow_auto_id:
+                                cow_id = row_data.get('ID') or row_data.get('個体ID')
+                                if cow_id not in (None, ''):
+                                    cow = self.db.get_cow_by_id(str(cow_id).zfill(4))
+                                    if cow:
+                                        cow_auto_id = cow.get('auto_id')
+                except Exception:
+                    pass
+
+        # 3) 行インデックスから table_original_rows を参照
+        if cow_auto_id is None and hasattr(self, 'table_original_rows') and self.table_original_rows:
+            children = tree.get_children()
+            try:
+                row_index = list(children).index(item)
+                if 0 <= row_index < len(self.table_original_rows):
+                    row_data = self.table_original_rows[row_index]
+                    cow_auto_id = row_data.get('auto_id')
+                    if not cow_auto_id:
+                        cow_id = row_data.get('ID') or row_data.get('個体ID')
+                        if cow_id not in (None, ''):
+                            cow = self.db.get_cow_by_id(str(cow_id).zfill(4))
+                            if cow:
+                                cow_auto_id = cow.get('auto_id')
+            except Exception:
+                pass
+
+        if not cow_auto_id:
             return
-        self.result_treeview.selection_set(item)
-        self.result_treeview.focus(item)
-        self._open_cow_card_for_list_item(item)
+
+        self._open_cow_card_as_toplevel(int(cow_auto_id))
+
+    def _open_cow_card_as_toplevel(self, cow_auto_id: int) -> None:
+        """個体カードを共通の個体カードウィンドウ（大）で開く"""
+        # リスト／イベントリストのダブルクリック経路では、
+        # CowCard をそのまま Toplevel に埋め込まず、CowCardWindow を使用して統一する。
+        from ui.cow_card_window import CowCardWindow
+
+        try:
+            existing = self._cow_card_popups.get(cow_auto_id)
+            if existing is not None:
+                try:
+                    if existing.window.winfo_exists():
+                        existing.load_cow(cow_auto_id)
+                        existing.show()
+                        existing.window.focus_set()
+                        return
+                except Exception:
+                    pass
+
+            ccw = CowCardWindow(
+                parent=self.root,
+                db_handler=self.db,
+                formula_engine=self.formula_engine,
+                rule_engine=self.rule_engine,
+                event_dictionary_path=self.event_dict_path if self.event_dict_path else None,
+                item_dictionary_path=self.item_dict_path if self.item_dict_path else None,
+                cow_auto_id=None,  # on_event_saved 設定後に明示ロード
+            )
+            ccw.cow_card.set_on_event_saved(self._on_event_saved)
+            ccw.load_cow(cow_auto_id)
+            ccw.show()
+            ccw.window.focus_set()
+            self._cow_card_popups[cow_auto_id] = ccw
+
+            def _cleanup_popup(_event=None, aid=cow_auto_id):
+                try:
+                    if hasattr(self, "_cow_card_popups"):
+                        self._cow_card_popups.pop(aid, None)
+                except Exception:
+                    pass
+
+            ccw.window.bind("<Destroy>", _cleanup_popup, add="+")
+            self._register_window(f'cow_card_popup_{cow_auto_id}', ccw.window, '個体カード')
+        except Exception as e:
+            logging.error(f"個体カードウィンドウ表示エラー: {e}", exc_info=True)
+            messagebox.showerror("エラー", f"個体カードの表示に失敗しました: {e}", parent=self.root)
     
     def _get_sort_key(self, value: Any) -> Any:
         """
@@ -15657,6 +16413,7 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                     continue
                 
                 calving_date = target_calving.get('event_date')
+                entr_cutoff = (cow.get('entr') or '').strip()[:10]
                 
                 # 該当産次での授精・受胎をカウント
                 inseminated = False
@@ -15665,6 +16422,8 @@ svg {{ font-family: "Meiryo UI", sans-serif; }}
                 for event in events:
                     event_date = event.get('event_date', '')
                     if event_date < calving_date:
+                        continue
+                    if entr_cutoff and event_date and str(event_date)[:10] < entr_cutoff:
                         continue
                     
                     event_number = event.get('event_number')

@@ -199,8 +199,9 @@ class ReproductionCheckupExamLogEditorWindow:
 
         self.window = tk.Toplevel(parent)
         self.window.title("検診ログの編集")
-        self.window.geometry("680x520")
-        self.window.minsize(560, 400)
+        # 下部ボタンが判別しづらくならないよう、一覧ウインドウを余裕あるサイズにする
+        self.window.geometry("860x620")
+        self.window.minsize(760, 520)
 
         self.data: Dict[str, Dict[str, Any]] = {}
 
@@ -252,11 +253,25 @@ class ReproductionCheckupExamLogEditorWindow:
             foreground="gray",
         )
 
+        ttk.Separator(main, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(10, 0))
+
         btn_frame = ttk.Frame(main)
-        btn_frame.pack(fill=tk.X, pady=(14, 0))
+        btn_frame.pack(fill=tk.X, pady=(10, 2))
+        # 左側に余白を取って、操作ボタンをまとまりとして認識しやすくする
+        ttk.Frame(btn_frame).pack(side=tk.LEFT, fill=tk.X, expand=True)
         if self.flow_window:
-            ttk.Button(btn_frame, text="レポートを表示", command=self._output_report, width=16).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(btn_frame, text="閉じる", command=self.window.destroy, width=12).pack(side=tk.LEFT)
+            ttk.Button(
+                btn_frame,
+                text="レポートを表示",
+                command=self._output_report,
+                width=18
+            ).pack(side=tk.RIGHT, padx=(0, 10), ipady=2)
+        ttk.Button(
+            btn_frame,
+            text="閉じる",
+            command=self.window.destroy,
+            width=12
+        ).pack(side=tk.RIGHT, ipady=2)
 
     def _on_right_click(self, event):
         """一覧行の右クリックでコンテキストメニュー（編集・削除）を表示"""

@@ -7,8 +7,17 @@ parent が Toplevel のときは別ウィンドウ、Frame のときはそのフ
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Tuple
+import json
 import logging
+import warnings
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.transforms import blended_transform_factory
 
 from db.db_handler import DBHandler
 from modules.rule_engine import RuleEngine
@@ -21,12 +30,49 @@ from modules.app_settings_manager import get_app_settings_manager
 from ui.cow_card import CowCard
 
 
+def _setup_japanese_font() -> None:
+    """利用可能な日本語フォントを検出して matplotlib に設定"""
+    preferred_fonts = [
+        "MS Gothic",
+        "MS PGothic",
+        "Meiryo",
+        "Yu Gothic",
+        "MS UI Gothic",
+        "Noto Sans CJK JP",
+    ]
+
+    try:
+        available_fonts = [f.name for f in font_manager.fontManager.ttflist]
+        selected_font = None
+        for font_name in preferred_fonts:
+            if font_name in available_fonts:
+                selected_font = font_name
+                break
+
+        # 見つからない場合はデフォルトのまま（フォールバック）
+        if selected_font:
+            plt.rcParams["font.family"] = selected_font
+
+        # マイナス記号の文字化け対策
+        plt.rcParams["axes.unicode_minus"] = False
+
+        # matplotlib のフォント警告を抑制（見た目崩れの回避が主目的）
+        warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib.font_manager")
+        warnings.filterwarnings("ignore", message=".*findfont.*", category=UserWarning)
+    except Exception:
+        # フォント設定が失敗しても致命的にしない
+        return
+
+
+_setup_japanese_font()
+
+
 class CowHistoryWindow:
     """個体カード用のイベント履歴（別ウィンドウまたは埋め込み）"""
 
     def __init__(
         self,
-        parent: Union[tk.Toplevel, tk.Frame],
+        parent: Union[tk.Toplevel, tk.Frame, ttk.Frame],
         cow_card: CowCard,
         db_handler: DBHandler,
     ):
@@ -97,6 +143,18 @@ class CowHistoryWindow:
         )
         reproduction_checkbox.pack(side=tk.LEFT, padx=(12, 0))
 
+        # Tkinter のラッパーは、参照が切れるとGCで destroy されることがあるため、
+        # ウィジェット参照を attributes として保持する
+        self.content_paned = ttk.PanedWindow(container, orient=tk.VERTICAL)
+        self.content_paned.pack(fill=tk.BOTH, expand=True)
+
+        self.tree_frame = ttk.Frame(self.content_paned)
+        self.graph_frame = ttk.Frame(self.content_paned)
+        # グラフを右ペイン下半分として見やすくする
+        #（イベント履歴は上側に縮める）
+        self.content_paned.add(self.tree_frame, weight=1)
+        self.content_paned.add(self.graph_frame, weight=1)
+
         # Treeview
         columns = ("date", "dim", "event", "note")
         event_font_family = "MS Gothic"
@@ -114,10 +172,11 @@ class CowHistoryWindow:
             pass
 
         self.event_tree = ttk.Treeview(
-            container,
+            self.tree_frame,
             columns=columns,
             show="headings",
-            height=35,
+            # パン配置による高さ調整の邪魔にならないよう表示行数を抑える
+            height=20,
             style="History.Treeview",
         )
 
@@ -151,7 +210,7 @@ class CowHistoryWindow:
         )
 
         scrollbar = ttk.Scrollbar(
-            container, orient=tk.VERTICAL, command=self.event_tree.yview
+            self.tree_frame, orient=tk.VERTICAL, command=self.event_tree.yview
         )
         self.event_tree.configure(yscrollcommand=scrollbar.set)
 
@@ -167,6 +226,22 @@ class CowHistoryWindow:
         self.event_tree.bind("<ButtonRelease-2>", self._on_event_context_menu)
         # ダブルクリックで編集（右クリックと同じ可否）
         self.event_tree.bind("<Double-Button-1>", self._on_event_double_click)
+
+        # 今産次の乳検推移（DIM横軸・左=乳量、右=リニアスコア）
+        ttk.Label(
+            self.graph_frame,
+            text="乳量・リニアスコア推移（今産次）",
+            font=("Meiryo UI", max(9, font_size - 1), "bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        self.graph_canvas_frame = ttk.Frame(self.graph_frame)
+        self.graph_canvas_frame.pack(fill=tk.BOTH, expand=True)
+        # 右ペイン下側（グラフ領域）で読みやすい高さに調整
+        self.figure = Figure(figsize=(6, 4.5), dpi=100)
+        self.ax_milk = self.figure.add_subplot(111)
+        self.ax_ls = None
+        self.graph_canvas = FigureCanvasTkAgg(self.figure, self.graph_canvas_frame)
+        self.graph_canvas.draw()
+        self.graph_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     @staticmethod
     def _parse_tree_event_id(row_id: str) -> Optional[int]:
@@ -269,6 +344,7 @@ class CowHistoryWindow:
             self.cow_card._on_edit_event(event_id)
         if self.cow_auto_id:
             self._display_events()
+            self._draw_milk_ls_graph()
 
     def _on_delete_event(self, event_id: int):
         """削除メニュー選択時：CowCard の削除処理を呼び、履歴を再表示"""
@@ -276,6 +352,7 @@ class CowHistoryWindow:
             self.cow_card._on_delete_event(event_id)
         if self.cow_auto_id:
             self._display_events()
+            self._draw_milk_ls_graph()
 
     def _on_close(self):
         """ウィンドウクローズ時の処理（別ウィンドウの場合のみ）"""
@@ -320,11 +397,351 @@ class CowHistoryWindow:
                 logging.exception("CowHistoryWindow.load_cow: タイトル更新に失敗しました。")
 
         self._display_events()
+        self._draw_milk_ls_graph()
 
     def _on_reproduction_filter_changed(self):
         """繁殖フィルターチェックボックスの変更時の処理"""
         if self.cow_auto_id:
             self._display_events()
+
+    @staticmethod
+    def _to_float(value: Any) -> Optional[float]:
+        """値をfloatに変換（不可の場合はNone）"""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            text = str(value).strip()
+            if not text:
+                return None
+            return float(text)
+        except (TypeError, ValueError):
+            return None
+
+    def _ai_et_overlay_rows(
+        self,
+        events_asc: List[Dict[str, Any]],
+        latest_calving_date: Optional[str],
+        current_lact: Optional[Any],
+    ) -> List[Tuple[int, bool]]:
+        """
+        今産次の AI/ET を (DIM, outcome が P か) のリストで返す。
+        受胎は rule_engine が json_data.outcome に付与する 'P' で判定する。
+        """
+        rows: List[Tuple[int, bool]] = []
+        for event in events_asc:
+            en = event.get("event_number")
+            if en not in (RuleEngine.EVENT_AI, RuleEngine.EVENT_ET):
+                continue
+            event_date = event.get("event_date")
+            event_lact = event.get("event_lact")
+            if current_lact is not None and event_lact is not None:
+                include_event = int(event_lact) == int(current_lact)
+            elif latest_calving_date and event_date:
+                include_event = event_date >= latest_calving_date
+            else:
+                include_event = False
+            if not include_event:
+                continue
+
+            dim_value = event.get("event_dim")
+            if dim_value is None:
+                dim_value = self._calculate_dim_at_event_date(events_asc, event_date or "")
+            if dim_value is None:
+                continue
+            try:
+                dim_int = int(dim_value)
+            except (TypeError, ValueError):
+                continue
+
+            jd = event.get("json_data")
+            if isinstance(jd, str):
+                try:
+                    jd = json.loads(jd)
+                except Exception:
+                    jd = {}
+            if not isinstance(jd, dict):
+                jd = {}
+            outcome = (jd.get("outcome") or "").strip().upper()
+            is_p = outcome == "P"
+            rows.append((dim_int, is_p))
+        rows.sort(key=lambda x: x[0])
+        return rows
+
+    def _plot_ai_et_markers(self, ai_rows: List[Tuple[int, bool]]) -> None:
+        """
+        AI/ET を縦線ではなく、グラフ上側（axes 座標で上三分の一の帯の中央付近）にプロットする。
+        受胎（outcome=P）は ☆（*）、その他は △（^）。
+        """
+        if not ai_rows:
+            return
+        # 上三分の一: y_axes ∈ [2/3, 1] の中央 = 5/6
+        y_axes = 5.0 / 6.0
+        trans = blended_transform_factory(self.ax_milk.transData, self.ax_milk.transAxes)
+        xs_p = [d for d, p in ai_rows if p]
+        xs_o = [d for d, p in ai_rows if not p]
+        if xs_p:
+            self.ax_milk.plot(
+                xs_p,
+                [y_axes] * len(xs_p),
+                transform=trans,
+                linestyle="none",
+                marker="*",
+                markersize=12,
+                markerfacecolor="#00acc1",
+                markeredgewidth=0,
+                clip_on=False,
+                zorder=4,
+            )
+            # 受胎AI/ET（☆）には DIM を数値で併記する
+            for d in xs_p:
+                self.ax_milk.text(
+                    d,
+                    min(0.98, y_axes + 0.04),
+                    str(int(d)),
+                    transform=trans,
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                    color="#00838f",
+                    clip_on=False,
+                    zorder=5,
+                )
+        if xs_o:
+            self.ax_milk.plot(
+                xs_o,
+                [y_axes] * len(xs_o),
+                transform=trans,
+                linestyle="none",
+                marker="^",
+                markersize=9,
+                markerfacecolor="#5c6bc0",
+                markeredgewidth=0,
+                clip_on=False,
+                zorder=4,
+            )
+
+    @staticmethod
+    def _ai_et_legend_handles(ai_rows: List[Tuple[int, bool]]) -> Tuple[List[Line2D], List[str]]:
+        """AI/ET 凡例用のハンドル（マーカーのみ）"""
+        leg_h: List[Line2D] = []
+        leg_l: List[str] = []
+        if any(r[1] for r in ai_rows):
+            leg_h.append(
+                Line2D(
+                    [0],
+                    [0],
+                    linestyle="none",
+                    marker="*",
+                    markersize=12,
+                    markerfacecolor="#00acc1",
+                    markeredgewidth=0,
+                )
+            )
+            leg_l.append("受胎AI/ET")
+        if any(not r[1] for r in ai_rows):
+            leg_h.append(
+                Line2D(
+                    [0],
+                    [0],
+                    linestyle="none",
+                    marker="^",
+                    markersize=9,
+                    markerfacecolor="#5c6bc0",
+                    markeredgewidth=0,
+                )
+            )
+            leg_l.append("AI/ET")
+        return leg_h, leg_l
+
+    def _draw_milk_ls_graph(self) -> None:
+        """今産次の乳量・リニアスコア推移グラフを描画（欠損はスキップ）。AI/ET は縦線で重ねる。"""
+        self.figure.clear()
+        self.ax_milk = self.figure.add_subplot(111)
+        self.ax_ls = self.ax_milk.twinx()
+
+        if not self.cow_auto_id:
+            self.ax_milk.text(
+                0.5, 0.5, "個体が未選択です", ha="center", va="center", transform=self.ax_milk.transAxes
+            )
+            self.graph_canvas.draw_idle()
+            return
+
+        try:
+            cow = self.db.get_cow_by_auto_id(self.cow_auto_id) or {}
+            current_lact = cow.get("lact")
+            events_all = self.db.get_events_by_cow(self.cow_auto_id, include_deleted=False)
+            events_asc = sorted(
+                events_all,
+                key=lambda e: ((e.get("event_date") or ""), (e.get("id") or 0)),
+            )
+
+            latest_calving_date = None
+            for event in events_asc:
+                if event.get("event_number") == RuleEngine.EVENT_CALV:
+                    event_date = event.get("event_date")
+                    if event_date and (latest_calving_date is None or event_date > latest_calving_date):
+                        latest_calving_date = event_date
+
+            milk_points: List[Tuple[int, float]] = []
+            ls_points: List[Tuple[int, float]] = []
+            for event in events_asc:
+                if event.get("event_number") != RuleEngine.EVENT_MILK_TEST:
+                    continue
+
+                event_date = event.get("event_date")
+                event_lact = event.get("event_lact")
+                include_event = True
+
+                # 今産次のみ: event_lact が使える場合は厳密一致、欠損時は最新分娩以降で代替
+                if current_lact is not None and event_lact is not None:
+                    include_event = int(event_lact) == int(current_lact)
+                elif latest_calving_date and event_date:
+                    include_event = event_date >= latest_calving_date
+                else:
+                    include_event = False
+
+                if not include_event:
+                    continue
+
+                dim_value = event.get("event_dim")
+                if dim_value is None:
+                    dim_value = self._calculate_dim_at_event_date(events_asc, event_date or "")
+                if dim_value is None:
+                    continue
+                try:
+                    dim_int = int(dim_value)
+                except (TypeError, ValueError):
+                    continue
+
+                json_data = event.get("json_data")
+                if not isinstance(json_data, dict):
+                    json_data = {}
+
+                milk = self._to_float(json_data.get("milk_yield"))
+                ls = self._to_float(json_data.get("ls"))
+
+                if milk is not None:
+                    milk_points.append((dim_int, milk))
+                if ls is not None:
+                    ls_points.append((dim_int, ls))
+
+            milk_points.sort(key=lambda x: x[0])
+            ls_points.sort(key=lambda x: x[0])
+
+            ai_rows = self._ai_et_overlay_rows(events_asc, latest_calving_date, current_lact)
+
+            if not milk_points and not ls_points:
+                self.ax_milk.set_xlabel("DIM")
+                self.ax_milk.set_xlim(0, 400)
+                self.ax_milk.set_xticks(list(range(0, 401, 50)))
+                self.ax_milk.set_ylim(0, 60)
+                self.ax_ls.set_ylim(0, 8)
+                self.ax_milk.grid(True, color="#e0e0e0", linewidth=0.8)
+                self.ax_milk.set_axisbelow(True)
+                self.ax_milk.set_title("乳量・リニアスコア推移（今産次）", fontsize=10)
+                if ai_rows:
+                    self._plot_ai_et_markers(ai_rows)
+                    leg_h, leg_l = self._ai_et_legend_handles(ai_rows)
+                    self.ax_milk.legend(leg_h, leg_l, loc="upper right", fontsize=8)
+                    self.ax_milk.text(
+                        0.5,
+                        0.5,
+                        "今産次の乳検データがありません",
+                        ha="center",
+                        va="center",
+                        transform=self.ax_milk.transAxes,
+                        fontsize=10,
+                        color="#757575",
+                    )
+                else:
+                    self.ax_milk.text(
+                        0.5,
+                        0.5,
+                        "今産次の乳検データがありません",
+                        ha="center",
+                        va="center",
+                        transform=self.ax_milk.transAxes,
+                    )
+                self.figure.tight_layout()
+                self.graph_canvas.draw_idle()
+                return
+
+            handles = []
+            labels = []
+            if milk_points:
+                x_milk = [p[0] for p in milk_points]
+                y_milk = [p[1] for p in milk_points]
+                milk_line = self.ax_milk.plot(
+                    x_milk,
+                    y_milk,
+                    color="#1e88e5",
+                    marker="o",
+                    linewidth=1.8,
+                    markersize=4,
+                    label="乳量(kg)",
+                    zorder=3,
+                )[0]
+                self.ax_milk.set_ylabel("乳量(kg)", color="#1e88e5")
+                self.ax_milk.tick_params(axis="y", colors="#1e88e5")
+                handles.append(milk_line)
+                labels.append("乳量(kg)")
+            else:
+                self.ax_milk.set_ylabel("乳量(kg)", color="#1e88e5")
+                self.ax_milk.tick_params(axis="y", colors="#1e88e5")
+
+            if ls_points:
+                x_ls = [p[0] for p in ls_points]
+                y_ls = [p[1] for p in ls_points]
+                ls_line = self.ax_ls.plot(
+                    x_ls,
+                    y_ls,
+                    color="#fb8c00",
+                    marker="s",
+                    linewidth=1.6,
+                    markersize=4,
+                    label="リニアスコア",
+                    zorder=3,
+                )[0]
+                self.ax_ls.set_ylabel("リニアスコア", color="#fb8c00")
+                self.ax_ls.tick_params(axis="y", colors="#fb8c00")
+                handles.append(ls_line)
+                labels.append("リニアスコア")
+            else:
+                self.ax_ls.set_ylabel("リニアスコア", color="#fb8c00")
+                self.ax_ls.tick_params(axis="y", colors="#fb8c00")
+
+            self.ax_milk.set_xlabel("DIM")
+            # 横軸（DIM）を固定：個体ごとの差分でスケールが変わらないようにする
+            self.ax_milk.set_xlim(0, 400)
+            self.ax_milk.set_xticks(list(range(0, 401, 50)))
+            # 縦軸を固定：乳量(左)=0-60kg, リニアスコア(右)=0-8
+            self.ax_milk.set_ylim(0, 60)
+            self.ax_ls.set_ylim(0, 8)
+            self.ax_milk.grid(True, color="#e0e0e0", linewidth=0.8)
+            self.ax_milk.set_axisbelow(True)
+            self.ax_milk.set_title("乳量・リニアスコア推移（今産次）", fontsize=10)
+
+            # 今産次の AI/ET：上三分の一付近に ☆（受胎=P）／△（その他）
+            self._plot_ai_et_markers(ai_rows)
+            ah, al = self._ai_et_legend_handles(ai_rows)
+            handles.extend(ah)
+            labels.extend(al)
+
+            if handles:
+                self.ax_milk.legend(handles, labels, loc="upper right", fontsize=8)
+
+            self.figure.tight_layout()
+            self.graph_canvas.draw_idle()
+        except Exception as e:
+            logging.exception("CowHistoryWindow._draw_milk_ls_graph: %s", e)
+            self.figure.clear()
+            self.ax_milk = self.figure.add_subplot(111)
+            self.ax_milk.text(
+                0.5, 0.5, "グラフの描画に失敗しました", ha="center", va="center", transform=self.ax_milk.transAxes
+            )
+            self.graph_canvas.draw_idle()
 
     # ======== イベント表示ロジック（CowCard とほぼ同じ） ========
 

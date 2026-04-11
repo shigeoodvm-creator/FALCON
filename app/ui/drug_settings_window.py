@@ -6,10 +6,12 @@ FALCON2 - 農場薬品設定ウインドウ
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import json
 import logging
+
+import constants
 
 
 class DrugSettingsWindow:
@@ -95,27 +97,165 @@ class DrugSettingsWindow:
             # ファイルが存在しない場合はデフォルトデータのまま
             logging.info("農場薬品設定ファイルが存在しません")
     
-    def _save_settings(self):
-        """設定を保存（更新日は _on_save で変更があった項目のみ設定済み）"""
-        data = {
+    def _settings_payload(self) -> Dict[str, Any]:
+        """現在の self.drugs / self.treatment_fees から JSON 用 dict を構築"""
+        return {
             "pg": self.drugs["pg"],
             "gnrh": self.drugs["gnrh"],
             "vaginal_insert": self.drugs["vaginal_insert"],
             "other": self.drugs["other"],
-            "treatment_fees": self.treatment_fees
+            "treatment_fees": self.treatment_fees,
         }
-        
+
+    def _write_settings_to_farm_dir(self, farm_dir: Path) -> None:
+        """指定農場フォルダに drug_settings.json を書き込む（例外は呼び出し元で捕捉）"""
+        farm_dir = Path(farm_dir)
+        farm_dir.mkdir(parents=True, exist_ok=True)
+        path = farm_dir / "drug_settings.json"
+        data = self._settings_payload()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logging.info("農場薬品設定を保存しました: %s", path)
+
+    @staticmethod
+    def _list_sibling_farm_directories(farm_path: Path) -> List[Path]:
+        """同じ親フォルダ直下に farm.db がある農場フォルダ一覧（名前順）"""
+        parent = Path(farm_path).parent
+        out: List[Path] = []
         try:
-            self.farm_path.mkdir(parents=True, exist_ok=True)
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logging.info("農場薬品設定を保存しました")
-            return True
-        except Exception as e:
-            logging.error(f"農場薬品設定ファイル保存エラー: {e}")
-            messagebox.showerror("エラー", f"設定ファイルの保存に失敗しました: {e}")
-            return False
-    
+            for item in parent.iterdir():
+                if item.is_dir() and (item / "farm.db").exists():
+                    out.append(item.resolve())
+        except OSError as e:
+            logging.warning("同階層農場の列挙に失敗: %s", e)
+        return sorted(out, key=lambda p: p.name.lower())
+
+    @staticmethod
+    def _list_all_farm_directories_under_root(farms_root: Path) -> List[Path]:
+        """FARMS_ROOT 以下で farm.db があるディレクトリをすべて（再帰）"""
+        root = Path(farms_root)
+        if not root.exists():
+            return []
+        found = set()
+        try:
+            for db in root.rglob("farm.db"):
+                if db.is_file():
+                    found.add(db.parent.resolve())
+        except OSError as e:
+            logging.warning("FARMS 配下の農場列挙に失敗: %s", e)
+        return sorted(found, key=lambda p: str(p).lower())
+
+    def _prompt_save_scope(self) -> Optional[str]:
+        """
+        保存範囲を選択。戻り値: \"current\" | \"siblings\" | \"all\" | None（キャンセル）
+        """
+        siblings = self._list_sibling_farm_directories(self.farm_path)
+        all_farms = self._list_all_farm_directories_under_root(constants.FARMS_ROOT)
+
+        dlg = tk.Toplevel(self.window)
+        dlg.title("保存先の選択")
+        dlg.transient(self.window)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        var = tk.StringVar(value="current")
+        result: Dict[str, Optional[str]] = {"v": None}
+
+        f = ttk.Frame(dlg, padding=16)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            f,
+            text="薬品設定（製品名・単価・処置料）をどこに保存するか選んでください。",
+            font=("", 10),
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        ttk.Radiobutton(
+            f,
+            text=f"この農場のみ（{self.farm_path.name}）",
+            variable=var,
+            value="current",
+        ).pack(anchor=tk.W)
+
+        sib_note = f"同じフォルダ内の全農場（{len(siblings)} 件）\n    親フォルダ: {self.farm_path.parent}"
+        rb_sib = ttk.Radiobutton(
+            f,
+            text=sib_note,
+            variable=var,
+            value="siblings",
+        )
+        rb_sib.pack(anchor=tk.W, pady=(8, 0))
+        if len(siblings) <= 1:
+            rb_sib.state(["disabled"])
+
+        all_note = (
+            f"FARMS ルート配下の全農場（{len(all_farms)} 件）\n"
+            f"    ルート: {constants.FARMS_ROOT}"
+        )
+        rb_all = ttk.Radiobutton(f, text=all_note, variable=var, value="all")
+        rb_all.pack(anchor=tk.W, pady=(8, 0))
+        if len(all_farms) <= 1:
+            rb_all.state(["disabled"])
+
+        ttk.Label(
+            f,
+            text="※ 複数農場へ保存すると、各農場の drug_settings.json が同じ内容で上書きされます。",
+            font=("", 8),
+            foreground="#555",
+        ).pack(anchor=tk.W, pady=(12, 0))
+
+        bf = ttk.Frame(f)
+        bf.pack(fill=tk.X, pady=(14, 0))
+
+        def ok() -> None:
+            result["v"] = var.get()
+            dlg.destroy()
+
+        def cancel() -> None:
+            result["v"] = None
+            dlg.destroy()
+
+        ttk.Button(bf, text="OK", command=ok, width=10).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(bf, text="キャンセル", command=cancel, width=10).pack(side=tk.RIGHT)
+
+        dlg.protocol("WM_DELETE_WINDOW", cancel)
+        dlg.update_idletasks()
+        w, h = dlg.winfo_width(), dlg.winfo_height()
+        px = self.window.winfo_rootx() + (self.window.winfo_width() // 2) - (w // 2)
+        py = self.window.winfo_rooty() + (self.window.winfo_height() // 2) - (h // 2)
+        dlg.geometry(f"+{max(0, px)}+{max(0, py)}")
+
+        self.window.wait_window(dlg)
+        return result["v"]
+
+    def _targets_for_scope(self, scope: str) -> List[Path]:
+        if scope == "current":
+            return [self.farm_path.resolve()]
+        if scope == "siblings":
+            return list(self._list_sibling_farm_directories(self.farm_path))
+        if scope == "all":
+            found = list(self._list_all_farm_directories_under_root(constants.FARMS_ROOT))
+            cur = self.farm_path.resolve()
+            paths = {p.resolve() for p in found}
+            if cur not in paths:
+                # FARMS ルート外で開いている場合も、現在農場へは必ず書けるようにする
+                found.append(cur)
+            return sorted(found, key=lambda p: str(p).lower())
+        return []
+
+    def _save_to_targets(self, targets: List[Path]) -> Tuple[int, List[str]]:
+        """複数農場へ保存。成功数とエラーメッセージ一覧を返す。"""
+        errors: List[str] = []
+        ok = 0
+        for fp in targets:
+            try:
+                self._write_settings_to_farm_dir(fp)
+                ok += 1
+            except Exception as e:
+                logging.exception("農場薬品設定の保存エラー: %s", fp)
+                errors.append(f"{fp.name}: {e}")
+        return ok, errors
+
     def _create_widgets(self):
         """ウィジェットを作成"""
         main_frame = ttk.Frame(self.window, padding=10)
@@ -285,12 +425,19 @@ class DrugSettingsWindow:
             text="保存",
             command=self._on_save
         ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(
+            button_frame,
+            text="※ 保存時に、この農場のみ／同じフォルダの全農場／FARMS 配下の全農場を選べます。",
+            font=("", 8),
+            foreground="#555",
+        ).pack(side=tk.LEFT, padx=(8, 0))
         
         ttk.Button(
             button_frame,
             text="閉じる",
             command=self._on_close
-        ).pack(side=tk.LEFT, padx=5)
+        ).pack(side=tk.RIGHT, padx=5)
     
     def _create_treatment_fees_section(self, parent_frame: ttk.Frame):
         """
@@ -411,11 +558,13 @@ class DrugSettingsWindow:
             else:
                 entry["date"].config(text="")
     
-    def _on_save(self):
-        """保存ボタンをクリック"""
+    def _sync_widgets_to_model(self) -> bool:
+        """
+        入力欄の内容を self.drugs / self.treatment_fees に反映する。
+        検証エラー時は False。
+        """
         today = datetime.now().strftime("%Y-%m-%d")
-        
-        # 入力値をデータに反映（変更があった項目のみ updated_at を更新）
+
         # PG
         for i, entry in enumerate(self.pg_entries):
             name = entry["name"].get().strip()
@@ -426,7 +575,7 @@ class DrugSettingsWindow:
                     price = float(price_str)
                 except ValueError:
                     messagebox.showerror("エラー", f"PG{i+1}の単価が正しい数値ではありません。")
-                    return
+                    return False
             item = self.drugs["pg"][i]
             changed = (item.get("name") != name or item.get("unit_price") != price)
             item["name"] = name
@@ -444,7 +593,7 @@ class DrugSettingsWindow:
                     price = float(price_str)
                 except ValueError:
                     messagebox.showerror("エラー", f"GnRH{i+1}の単価が正しい数値ではありません。")
-                    return
+                    return False
             item = self.drugs["gnrh"][i]
             changed = (item.get("name") != name or item.get("unit_price") != price)
             item["name"] = name
@@ -462,7 +611,7 @@ class DrugSettingsWindow:
                     price = float(price_str)
                 except ValueError:
                     messagebox.showerror("エラー", f"留置{i+1}の単価が正しい数値ではありません。")
-                    return
+                    return False
             item = self.drugs["vaginal_insert"][i]
             changed = (item.get("name") != name or item.get("unit_price") != price)
             item["name"] = name
@@ -480,7 +629,7 @@ class DrugSettingsWindow:
                     price = float(price_str)
                 except ValueError:
                     messagebox.showerror("エラー", f"その他{i+1}の単価が正しい数値ではありません。")
-                    return
+                    return False
             item = self.drugs["other"][i]
             changed = (item.get("name") != name or item.get("unit_price") != price)
             item["name"] = name
@@ -506,19 +655,61 @@ class DrugSettingsWindow:
                     except ValueError:
                         fee_label = fee_label_map.get(fee_key, fee_key)
                         messagebox.showerror("エラー", f"{fee_label}の料金が正しい数値ではありません。")
-                        return
+                        return False
                 fee_data = self.treatment_fees[fee_key]
                 changed = (fee_data.get("fee") != fee)
                 fee_data["fee"] = fee
                 if changed:
                     fee_data["updated_at"] = today
-        
-        # 保存
-        if self._save_settings():
+
+        return True
+
+    def _on_save(self):
+        """保存ボタン：入力を検証後、保存先（この農場のみ／同階層全件／FARMS 配下全件）を選択して保存"""
+        if not self._sync_widgets_to_model():
+            return
+
+        scope = self._prompt_save_scope()
+        if scope is None:
+            return
+
+        targets = self._targets_for_scope(scope)
+        if not targets:
+            messagebox.showwarning("保存", "保存対象の農場フォルダがありません。")
+            return
+
+        if len(targets) > 1:
+            preview = "\n".join(f"・{p.name}" for p in targets[:25])
+            if len(targets) > 25:
+                preview += f"\n…他 {len(targets) - 25} 件"
+            if not messagebox.askyesno(
+                "確認",
+                f"次の {len(targets)} 件の農場に、同じ薬品設定（drug_settings.json）を書き込みます。\n"
+                f"よろしいですか？\n\n{preview}",
+            ):
+                return
+
+        ok, errors = self._save_to_targets(targets)
+        if ok == 0:
+            msg = "保存に失敗しました。"
+            if errors:
+                msg += "\n\n" + "\n".join(errors[:8])
+            messagebox.showerror("エラー", msg)
+            return
+
+        if errors:
+            messagebox.showwarning(
+                "一部失敗",
+                f"{ok} 件は保存できましたが、以下は失敗しました:\n\n"
+                + "\n".join(errors[:12]),
+            )
+        elif ok == 1:
             messagebox.showinfo("保存完了", "農場薬品設定を保存しました。")
-            # 更新日付を表示に反映
-            self._load_data_to_widgets()
-    
+        else:
+            messagebox.showinfo("保存完了", f"{ok} 件の農場に薬品設定を保存しました。")
+
+        self._load_data_to_widgets()
+
     def _on_close(self):
         """閉じるボタンをクリック"""
         self.window.destroy()

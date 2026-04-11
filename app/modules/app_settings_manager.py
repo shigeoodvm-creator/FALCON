@@ -46,6 +46,7 @@ class AppSettingsManager:
             "font_size": 9,  # デフォルトフォントサイズ
             "selected_month_1": None,  # 任意月の乳検データ1の指定月（1-12、Noneは未指定）
             "selected_month_2": None,  # 任意月の乳検データ2の指定月（1-12、Noneは未指定）
+            "assist_mode": True,  # アシスタント（ホバーガイド）ON/OFF
         }
     
     def get(self, key: str, default: Any = None) -> Any:

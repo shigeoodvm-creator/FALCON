@@ -345,6 +345,21 @@ class EventInputWindow:
                 self.field_widgets[key] = combo
                 entry_widgets.append(combo)
                 continue
+
+            # choices 付き文字列（例: BLV結果）
+            choices = field.get("choices")
+            if choices and datatype == "str" and isinstance(choices, list) and len(choices) > 0:
+                combo = ttk.Combobox(
+                    self.form_frame,
+                    values=list(choices),
+                    width=28,
+                    state="readonly",
+                )
+                combo.set(choices[0])
+                combo.grid(row=i, column=1, sticky=tk.W, padx=5, pady=5)
+                self.field_widgets[key] = combo
+                entry_widgets.append(combo)
+                continue
             
             # その他のフィールドは従来通り
             if datatype == 'int':
@@ -527,7 +542,18 @@ class EventInputWindow:
             
             # json_dataをinput_fieldsに展開
             # _on_event_selected が呼ばれていることを確認
-            json_data = self.edit_event_data.get('json_data', {})
+            json_data = self.edit_event_data.get('json_data', {}) or {}
+            if not isinstance(json_data, dict):
+                json_data = {}
+            if event_number == RuleEngine.EVENT_BLV:
+                if not str(json_data.get("blv_result") or "").strip():
+                    bp = json_data.get("blv_positive")
+                    if bp is True:
+                        json_data = {**json_data, "blv_result": "陽性"}
+                    elif bp is False:
+                        json_data = {**json_data, "blv_result": "陰性"}
+                    else:
+                        json_data = {**json_data, "blv_result": "未検査"}
             if json_data and self.selected_event:
                 input_fields = self.selected_event.get('input_fields', [])
                 for field in input_fields:
@@ -539,8 +565,11 @@ class EventInputWindow:
                         field_datatype = field.get('datatype', 'str')
                         
                         if isinstance(widget, ttk.Combobox):
+                            fc = field.get("choices")
+                            if fc and isinstance(fc, list) and len(fc) > 0:
+                                widget.set(str(value))
                             # event_reference型の場合はevent_idで検索
-                            if field_datatype == 'event_reference':
+                            elif field_datatype == 'event_reference':
                                 if isinstance(value, (int, str)):
                                     event_id = int(value) if isinstance(value, str) and value.isdigit() else value
                                     # リストから該当するevent_idの項目を探す
@@ -595,6 +624,10 @@ class EventInputWindow:
                     # Comboboxの場合は選択値を取得
                     value = widget.get().strip()
                     if value:
+                        # choices 定義（BLV結果など）は値そのまま保存
+                        if field.get("choices") and isinstance(field.get("choices"), list) and len(field.get("choices")) > 0:
+                            json_data[key] = value
+                            continue
                         # event_reference型の場合はevent_idを抽出
                         if datatype == 'event_reference':
                             # 「123: 2024-01-01 (AI) - SIRE: ABC123」形式からevent_idを抽出

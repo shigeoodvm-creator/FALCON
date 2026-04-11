@@ -56,15 +56,8 @@ class EventDictionaryHelper:
     def _load_event_dictionary(self, event_dictionary_path: Optional[Path]):
         """event_dictionary.jsonを読み込む"""
         if event_dictionary_path is None:
-            # デフォルトパスを試行
-            default_paths = [
-                Path("docs/event_dictionary.json"),
-                Path("config_default/event_dictionary.json")
-            ]
-            for path in default_paths:
-                if path.exists():
-                    event_dictionary_path = path
-                    break
+            from constants import CONFIG_DEFAULT_DIR
+            event_dictionary_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         
         if event_dictionary_path and event_dictionary_path.exists():
             try:

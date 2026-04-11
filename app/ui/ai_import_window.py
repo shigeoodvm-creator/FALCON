@@ -161,7 +161,7 @@ class AIImportWindow:
 
         self.window = tk.Toplevel(parent)
         self.window.title("AIデータ取り込み")
-        self.window.geometry("900x600")
+        self.window.geometry("1020x620")
 
         self.file_path: Optional[Path] = None
         self.data_rows: List[Dict[str, Any]] = []
@@ -176,10 +176,11 @@ class AIImportWindow:
         file_frame.pack(fill=tk.X, pady=(0, 10))
 
         self.file_path_var = tk.StringVar()
-        ttk.Entry(file_frame, textvariable=self.file_path_var, width=70, state="readonly").pack(
+        ttk.Entry(file_frame, textvariable=self.file_path_var, width=55, state="readonly").pack(
             side=tk.LEFT, padx=(0, 10)
         )
-        ttk.Button(file_frame, text="参照...", command=self._select_file).pack(side=tk.LEFT)
+        ttk.Button(file_frame, text="参照...", command=self._select_file).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(file_frame, text="テンプレート出力", command=self._export_template).pack(side=tk.LEFT)
 
         preview_frame = ttk.LabelFrame(main_frame, text="プレビュー", padding=10)
         preview_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -193,7 +194,17 @@ class AIImportWindow:
 
         self.tree = ttk.Treeview(
             tree_frame,
-            columns=("cow_id", "jpn10", "date", "sire", "technician", "kind", "status"),
+            columns=(
+                "cow_id",
+                "jpn10",
+                "date",
+                "sire",
+                "technician",
+                "kind",
+                "insem",
+                "note",
+                "status",
+            ),
             show="headings",
             yscrollcommand=scrollbar_y.set,
             xscrollcommand=scrollbar_x.set,
@@ -204,10 +215,13 @@ class AIImportWindow:
         self.tree.heading("sire", text="SIRE")
         self.tree.heading("technician", text="授精師")
         self.tree.heading("kind", text="AI/ET")
+        self.tree.heading("insem", text="授精種類")
+        self.tree.heading("note", text="備考")
         self.tree.heading("status", text="状態")
-        for col in ("cow_id", "jpn10", "date", "sire", "technician", "kind", "status"):
-            self.tree.column(col, width=90)
-        self.tree.column("status", width=140)
+        for col in ("cow_id", "jpn10", "date", "sire", "technician", "kind", "insem", "note", "status"):
+            self.tree.column(col, width=82)
+        self.tree.column("note", width=100)
+        self.tree.column("status", width=120)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar_y.config(command=self.tree.yview)
         scrollbar_x.config(command=self.tree.xview)
@@ -266,6 +280,29 @@ class AIImportWindow:
                 continue
         raise ValueError("文字コードを判別できませんでした")
 
+    def _export_template(self):
+        from modules.reproduction_flow_templates import write_ai_et_template
+
+        path = filedialog.asksaveasfilename(
+            parent=self.window,
+            title="AI/ET テンプレートの保存先",
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel（推奨）", "*.xlsx"),
+                ("CSV", "*.csv"),
+                ("すべて", "*.*"),
+            ],
+            initialfile="繁殖検診_AI_ETテンプレート.xlsx",
+        )
+        if not path:
+            return
+        try:
+            write_ai_et_template(Path(path))
+            messagebox.showinfo("完了", f"テンプレートを保存しました:\n{path}")
+        except Exception as e:
+            logger.error(f"テンプレート出力エラー: {e}", exc_info=True)
+            messagebox.showerror("エラー", str(e))
+
     def _parse_csv(self):
         lines = self._read_csv_to_lines()
         if not lines:
@@ -316,25 +353,46 @@ class AIImportWindow:
             return str(v).strip()
         rows = []
         for _, r in df.iterrows():
-            rows.append([_cell_to_str(v) for v in r.tolist()])
+            line = [_cell_to_str(v) for v in r.tolist()]
+            if line and str(line[0]).strip().startswith("#"):
+                continue
+            rows.append(line)
         self._build_data_rows(headers, rows)
 
     def _build_data_rows(self, headers: List[str], rows: List[List[Any]]):
-        col_id = _find_column_index(headers, ["ID", "個体ID", "動物ID", "個体識別番号"])
+        col_id = _find_column_index(
+            headers,
+            ["cow_id", "牛のID", "個体ID", "動物ID", "ID"],
+        )
         col_jpn10 = _find_column_index(
             headers,
-            ["JPN10", "個体識別番号", "Official ID", "個体識別", "識別番号"],
+            ["個体識別番号", "JPN10", "Official ID", "個体識別", "識別番号", "jpn10"],
         )
-        col_date = _find_column_index(headers, ["日付", "授精日", "AI日", "date", "DATE"])
-        col_sire = _find_column_index(headers, ["SIRE", " sire", "種雄牛", "雄牛"])
-        col_technician = _find_column_index(headers, ["授精師", "technician", "技師"])
-        col_et = _find_column_index(headers, ["ET", "胚移植"])
+        col_date = _find_column_index(
+            headers,
+            ["授精日", "日付", "AI日", "event_date", "date", "DATE"],
+        )
+        col_sire = _find_column_index(headers, ["種雄牛", "SIRE", "雄牛", " sire"])
+        col_technician = _find_column_index(
+            headers,
+            ["授精師コード", "授精師", "technician", "技師"],
+        )
+        col_et = _find_column_index(headers, ["胚移植", "ET"])
+        col_insem = _find_column_index(
+            headers,
+            ["授精種類コード", "insemination_type_code", "授精種類"],
+        )
+        col_note = _find_column_index(headers, ["備考", "note", "メモ"])
 
         # 列が見つからない場合は先頭列をID・2列目を日付としてフォールバック（4桁IDのみのExcel対応）
         if col_date is None and len(headers) >= 2:
             col_date = 1
         if col_date is None:
-            messagebox.showerror("エラー", "「日付」列が見つかりません。1行目にヘッダー（ID, 日付, SIRE 等）があるか確認してください。")
+            messagebox.showerror(
+                "エラー",
+                "「授精日」または「日付」に相当する列が見つかりません。\n"
+                "1行目の列名を変えていないか確認してください。",
+            )
             return
         if col_id is None and col_jpn10 is None:
             if len(headers) >= 1:
@@ -352,6 +410,8 @@ class AIImportWindow:
         data_rows = []
         for row in rows:
             if not any(row):
+                continue
+            if row and str(row[0]).strip().startswith("#"):
                 continue
             jpn10_raw = row[col_jpn10] if col_jpn10 is not None and col_jpn10 < len(row) else ""
             jpn10 = _extract_jpn10(jpn10_raw)
@@ -376,6 +436,13 @@ class AIImportWindow:
                 et_val = str(row[col_et]).strip()
                 is_et = bool(et_val and et_val.lower() not in ("0", "否", "なし", "-", ""))
 
+            insem = ""
+            if col_insem is not None and col_insem < len(row):
+                insem = str(row[col_insem]).strip()
+            note = ""
+            if col_note is not None and col_note < len(row):
+                note = str(row[col_note]).strip()
+
             data_rows.append({
                 "cow_id": cow_id,
                 "jpn10": jpn10 or "",
@@ -383,6 +450,8 @@ class AIImportWindow:
                 "sire": sire,
                 "technician": technician,
                 "is_et": is_et,
+                "insemination_type_code": insem,
+                "note": note,
             })
         self.data_rows = data_rows
         self._update_preview()
@@ -405,6 +474,8 @@ class AIImportWindow:
                     row.get("sire", ""),
                     row.get("technician", ""),
                     kind,
+                    row.get("insemination_type_code", ""),
+                    row.get("note", ""),
                     status,
                 ),
             )
@@ -480,19 +551,29 @@ class AIImportWindow:
             if row.get("technician"):
                 json_data["technician_code"] = str(row["technician"]).strip()
 
-            type_code = compute_suggested_insemination_type_code(
-                self.db, self.farm_path, cow_auto_id, event_date
-            )
-            if type_code is not None:
-                json_data["insemination_type_code"] = type_code
+            manual_insem = (row.get("insemination_type_code") or "").strip()
+            if manual_insem:
+                code_part = manual_insem
+                if "：" in code_part:
+                    code_part = code_part.split("：", 1)[0].strip()
+                elif ":" in code_part:
+                    code_part = code_part.split(":", 1)[0].strip()
+                json_data["insemination_type_code"] = code_part
+            else:
+                type_code = compute_suggested_insemination_type_code(
+                    self.db, self.farm_path, cow_auto_id, event_date
+                )
+                if type_code is not None:
+                    json_data["insemination_type_code"] = type_code
 
+            note_text = (row.get("note") or "").strip()
             try:
                 event_data = {
                     "cow_auto_id": cow_auto_id,
                     "event_number": event_number,
                     "event_date": event_date,
                     "json_data": json_data if json_data else None,
-                    "note": "Excel/CSVから取り込み",
+                    "note": note_text if note_text else "Excel/CSVから取り込み",
                 }
                 event_id = self.db.insert_event(event_data)
                 self.rule_engine.on_event_added(event_id)

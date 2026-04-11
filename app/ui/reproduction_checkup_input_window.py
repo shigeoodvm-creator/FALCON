@@ -55,11 +55,14 @@ class ReproductionCheckupInputWindow:
         "right_ovary_findings",
         "left_ovary_findings",
         "other",
+        "cycle_day",  # 発情周期Day（イベント入力の cycle_day と同一キー）
         "twin",  # 双子チェックボックス
         "female_judgment",  # ♀♂判定の♀
         "male_judgment",   # ♀♂判定の♂
         "bcs",  # BCS（体型スコア）
     ]
+    PREGNANCY_POSITIVE_EXEC_CODES = {"5", "6", "8"}
+    PREGNANCY_DIAG_EXEC_CODES = {"4", "5", "6", "7", "8"}
 
     def __init__(
         self,
@@ -276,6 +279,15 @@ class ReproductionCheckupInputWindow:
             anchor="w",
         )
         code_hint_lbl.pack(anchor=tk.W)
+        self.checkup_summary_label = tk.Label(
+            code_hint_frame,
+            text="",
+            font=("", 9, "bold"),
+            fg="#37474f",
+            anchor="w",
+            justify=tk.LEFT,
+        )
+        self.checkup_summary_label.pack(anchor=tk.W, pady=(2, 0))
 
         # テーブル（左：提示／右：入力）
         table_frame = ttk.Frame(main_frame)
@@ -286,6 +298,7 @@ class ReproductionCheckupInputWindow:
             "jpn10",
             "dim",
             "dai",
+            "last_checkup_date",
             "last_checkup_result",
             "checkup_code",
             "cow_id_dup",
@@ -297,6 +310,7 @@ class ReproductionCheckupInputWindow:
             "right_ovary_findings",
             "left_ovary_findings",
             "other",
+            "cycle_day",
         ]
 
         self.column_labels = {
@@ -305,6 +319,7 @@ class ReproductionCheckupInputWindow:
             "dim": "DIM",
             "dai": "授精後",
             "checkup_code": "検診種類",
+            "last_checkup_date": "前回検診日",
             "last_checkup_result": "前回検診結果",
             "cow_id_dup": "ID",
             "exec_code": "実施コード",
@@ -313,6 +328,7 @@ class ReproductionCheckupInputWindow:
             "right_ovary_findings": "右",  # 所見
             "left_ovary_findings": "左",  # 所見
             "other": "その他",  # 所見
+            "cycle_day": "Day",
         }
 
         # 左テーブル（表示行数を抑えて記録・信号まで1画面に収める）
@@ -332,6 +348,7 @@ class ReproductionCheckupInputWindow:
             "dim": 38,
             "dai": 45,
             "checkup_code": 65,
+            "last_checkup_date": 100,
             "last_checkup_result": 110,
             "cow_id_dup": 40,
         }
@@ -341,7 +358,7 @@ class ReproductionCheckupInputWindow:
                 text=self.column_labels.get(col, col),
                 command=lambda c=col: self._on_column_click(c),
             )
-            self.left_tree.column(col, width=left_widths.get(col, 80))
+            self.left_tree.column(col, width=left_widths.get(col, 80), anchor=tk.E)
 
         # 右テーブル（入力欄は常時ボックス表示）
         right_frame = ttk.Frame(table_frame)
@@ -357,6 +374,7 @@ class ReproductionCheckupInputWindow:
             ("right_ovary_findings", "右", 66),
             ("left_ovary_findings", "左", 66),
             ("other", "その他", 84),
+            ("cycle_day", "Day", 44),
             ("twin", "双子", 48),  # 双子チェックボックス
             ("female_judgment", "♀", 38),  # ♀♂判定の♀
             ("male_judgment", "♂", 38),    # ♀♂判定の♂
@@ -469,7 +487,7 @@ class ReproductionCheckupInputWindow:
         # 左ブロック: 部門・評価（8行）。行高を固定して右のメモ行と揃える。幅を明示して信号が描画されるようにする。
         left_block = ttk.Frame(inner)
         left_block.grid(row=0, column=0, sticky=tk.NW, padx=(0, 12))
-        ttk.Label(left_block, text="部門・評価", font=("", 9), width=label_width).pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(left_block, text="部門", font=("", 9), width=label_width).pack(anchor=tk.W, pady=(0, 4))
         # 1行の幅（ラベル＋信号3つ＋余白）。pack_propagate(False) 時に幅が0にならないよう指定
         signal_row_width = 220
         for key, label in VISIT_RATING_KEYS:
@@ -506,10 +524,21 @@ class ReproductionCheckupInputWindow:
         btn_frame = ttk.Frame(inner)
         btn_frame.grid(row=0, column=2, sticky=tk.NW, padx=(16, 0))
         ttk.Frame(btn_frame, height=1).pack(anchor=tk.W)
+        ttk.Label(
+            btn_frame,
+            text="表の検診入力と、\nこの「記録」欄を\nまとめて保存します。",
+            font=("", 8),
+            foreground="#607d8b",
+            justify=tk.CENTER,
+        ).pack(pady=(0, 8))
         btn_row = ttk.Frame(btn_frame)
-        btn_row.pack(fill=tk.X, pady=(4, 0))
-        ttk.Button(btn_row, text="保存", command=self._on_save, width=10).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_row, text="記録を保存", command=self._on_save_record, width=10).pack(fill=tk.X, pady=2)
+        btn_row.pack(fill=tk.X, pady=(0, 0))
+        ttk.Button(
+            btn_row,
+            text="検診・記録を保存",
+            command=self._on_save,
+            width=16,
+        ).pack(fill=tk.X, pady=2)
         ttk.Button(btn_row, text="閉じる", command=self._on_close, width=10).pack(fill=tk.X, pady=2)
 
         self._load_visit_notes()
@@ -560,17 +589,17 @@ class ReproductionCheckupInputWindow:
         except Exception as e:
             logging.warning(f"検診訪問メモ読み込みエラー: {e}")
 
-    def _on_save_record(self):
-        """記録保存ボタン：日付・部門の色・箇条書きを保存（2回目以降は上書き）"""
-        self._save_visit_notes(force=True)
-        messagebox.showinfo("記録保存", "記録を保存しました。")
-
-    def _save_visit_notes(self, force: bool = False):
-        """検診訪問メモを reproduction_checkup_visit_notes.json に保存（force=True のときは空でも上書き）"""
+    def _collect_visit_notes_data(self):
+        """現在の記録入力値（メモ・評価）を収集する。"""
         notes = []
         for entry in self.visit_note_entries:
             notes.append(entry.get().strip() if entry else "")
         ratings = {k: v for k, v in self.visit_ratings.items() if v}
+        return notes, ratings
+
+    def _save_visit_notes(self, force: bool = False):
+        """検診訪問メモを reproduction_checkup_visit_notes.json に保存（force=True のときは空でも上書き）"""
+        notes, ratings = self._collect_visit_notes_data()
         if not force and not ratings and not any(notes):
             return
         path = self.farm_path / VISIT_NOTES_FILENAME
@@ -592,8 +621,15 @@ class ReproductionCheckupInputWindow:
             messagebox.showerror("エラー", f"検診訪問メモの保存に失敗しました:\n{e}")
 
     def _on_close(self):
-        """閉じるボタン：検診訪問メモを保存してからウィンドウを閉じる"""
-        self._save_visit_notes()
+        """閉じる時：記録がある場合のみ保存確認してから閉じる。"""
+        notes, ratings = self._collect_visit_notes_data()
+        has_record = bool(ratings) or any(notes)
+        if has_record:
+            answer = messagebox.askyesnocancel("確認", "検診ログを保存しますか？")
+            if answer is None:
+                return
+            if answer:
+                self._save_visit_notes()
         try:
             if hasattr(self, "main_canvas") and self.main_canvas.winfo_exists():
                 self.main_canvas.unbind_all("<MouseWheel>")
@@ -624,6 +660,7 @@ class ReproductionCheckupInputWindow:
                 continue
 
             events = self.db.get_events_by_cow(cow_auto_id, include_deleted=False)
+            events_this_lact = self.checkup_logic.filter_events_current_lactation(events, cow)
             # DIMは検診日時点で計算（本日基準にしない）
             dim_val = self.formula_engine.calculate_dim_at_date(cow_auto_id, self.checkup_date)
 
@@ -637,14 +674,18 @@ class ReproductionCheckupInputWindow:
             # 原則フレッシュは授精後日数は空欄（分娩を挟んでいる場合も表示しない）
             if checkup_code != ReproductionCheckupLogic.CHECKUP_FRESH:
                 try:
-                    dai_val = self.formula_engine._calculate_dai_at_event_date(events, self.checkup_date)
+                    dai_val = self.formula_engine._calculate_dai_at_event_date(events_this_lact, self.checkup_date)
                     if dai_val is not None:
                         dai_str = str(dai_val)
                 except Exception as e:
                     logging.warning(f"DAI計算エラー (cow_auto_id={cow_auto_id}): {e}")
 
-            # 検診内容（前回検診イベント300～304、307のNOTE）を取得
-            last_checkup_result = self.formula_engine._get_last_reproduction_check_note(events) or ""
+            # 前回検診日・結果（当該産次のイベントのみ／繁殖検診一覧と同じ）
+            last_checkup_date_raw = self.formula_engine._get_last_reproduction_check_date(events_this_lact)
+            last_checkup_date_str = ""
+            if last_checkup_date_raw:
+                last_checkup_date_str = str(last_checkup_date_raw)[:10]
+            last_checkup_result = self.formula_engine._get_last_reproduction_check_note(events_this_lact) or ""
 
             row_id = str(cow_auto_id)
             row = {
@@ -656,6 +697,8 @@ class ReproductionCheckupInputWindow:
                 "dai": dai_val,
                 "dai_str": dai_str,
                 "checkup_code": checkup_code,
+                "last_checkup_date": last_checkup_date_raw,
+                "last_checkup_date_str": last_checkup_date_str,
                 "last_checkup_result": last_checkup_result,
             }
             self.display_rows.append(row)
@@ -673,6 +716,7 @@ class ReproductionCheckupInputWindow:
                         "right_ovary_findings": "",
                         "left_ovary_findings": "",
                         "other": "",
+                        "cycle_day": "",
                         "twin": False,
                         "female_judgment": False,
                         "male_judgment": False,
@@ -702,6 +746,7 @@ class ReproductionCheckupInputWindow:
                 row["jpn10"],
                 row["dim_str"],
                 row["dai_str"],
+                row.get("last_checkup_date_str", ""),
                 row.get("last_checkup_result", ""),
                 row["checkup_code"],
                 row["cow_id"],
@@ -748,6 +793,7 @@ class ReproductionCheckupInputWindow:
             self._pending_male_judgment_state_updates.clear()
 
         self._sync_input_canvas_size()
+        self._update_checkup_summary_label()
         
         # 現在ハイライトされている行があれば再ハイライト
         if self.current_highlighted_row_id:
@@ -900,6 +946,7 @@ class ReproductionCheckupInputWindow:
                     bg="#fff3c4",
                     relief="solid",
                     bd=1,
+                    justify=tk.RIGHT,
                 )
                 entry.place(x=x_offset, y=0, width=width_px, height=24)
                 x_offset += width_px
@@ -944,6 +991,14 @@ class ReproductionCheckupInputWindow:
                         self._update_twin_checkbox_state(rid)
                         self._update_female_judgment_checkbox_state(rid)
                         self._update_male_judgment_checkbox_state(rid)
+                    # Enter時のみ「その他」→「Day」へ
+                    if ck == "other":
+                        if self._focus_specific_entry(rid, "cycle_day"):
+                            return "break"
+                    # Day → Enter で双子〜♂を飛ばして BCS へ（値の有無に関わらず）
+                    if ck == "cycle_day":
+                        if self._focus_specific_entry(rid, "bcs"):
+                            return "break"
                     self._focus_next_entry(rid, ck)
                     return "break"
                 
@@ -1051,7 +1106,7 @@ class ReproductionCheckupInputWindow:
         pass
 
     def _focus_next_entry(self, row_id: str, column_name: str):
-        """次のセル（右）にフォーカスを移動。行末の「その他」では次の行の実施コードへ（エンターのみで次々入力可能）"""
+        """次のセル（右）にフォーカスを移動"""
         row_ids = [row["row_id"] for row in self.display_rows]
         if row_id not in row_ids:
             return
@@ -1064,11 +1119,7 @@ class ReproductionCheckupInputWindow:
 
         next_col_index = col_index + 1
         next_row_index = row_index
-        # 行末の「その他」で Enter → 次の行の実施コードへ（双子はスキップして次個体へ）
-        if column_name == "other":
-            next_col_index = 0
-            next_row_index = row_index + 1
-        elif next_col_index >= len(cols):
+        if next_col_index >= len(cols):
             next_col_index = 0
             next_row_index += 1
 
@@ -1080,10 +1131,25 @@ class ReproductionCheckupInputWindow:
         widget = self.input_widgets.get(next_row_id, {}).get(next_col)
         if widget:
             if next_row_index != row_index:
-                self._scroll_to_row(next_row_id)
+                self._ensure_row_visible(next_row_index)
             widget.focus_set()
             if hasattr(widget, "select_range"):
                 widget.select_range(0, tk.END)
+
+    def _focus_specific_entry(self, row_id: str, column_name: str) -> bool:
+        """指定セルにフォーカス移動。成功時 True を返す。"""
+        row_ids = [row["row_id"] for row in self.display_rows]
+        if row_id not in row_ids:
+            return False
+        row_index = row_ids.index(row_id)
+        widget = self.input_widgets.get(row_id, {}).get(column_name)
+        if not widget:
+            return False
+        self._ensure_row_visible(row_index)
+        widget.focus_set()
+        if hasattr(widget, "select_range"):
+            widget.select_range(0, tk.END)
+        return True
     
     def _focus_previous_entry(self, row_id: str, column_name: str):
         """前のセル（左）にフォーカスを移動"""
@@ -1111,7 +1177,7 @@ class ReproductionCheckupInputWindow:
         entry = self.input_widgets.get(prev_row_id, {}).get(prev_col)
         if entry:
             if prev_row_index != row_index:
-                self._scroll_to_row(prev_row_id)
+                self._ensure_row_visible(prev_row_index)
             entry.focus_set()
             if hasattr(entry, "select_range"):
                 entry.select_range(0, tk.END)
@@ -1135,7 +1201,7 @@ class ReproductionCheckupInputWindow:
         next_row_id = row_ids[next_row_index]
         entry = self.input_widgets.get(next_row_id, {}).get(column_name)
         if entry:
-            self._scroll_to_row(next_row_id)
+            self._ensure_row_visible(next_row_index)
             entry.focus_set()
             if hasattr(entry, "select_range"):
                 entry.select_range(0, tk.END)
@@ -1159,7 +1225,7 @@ class ReproductionCheckupInputWindow:
         prev_row_id = row_ids[prev_row_index]
         entry = self.input_widgets.get(prev_row_id, {}).get(column_name)
         if entry:
-            self._scroll_to_row(prev_row_id)
+            self._ensure_row_visible(prev_row_index)
             entry.focus_set()
             if hasattr(entry, "select_range"):
                 entry.select_range(0, tk.END)
@@ -1172,6 +1238,45 @@ class ReproductionCheckupInputWindow:
         entry = self.input_widgets.get(first_row_id, {}).get(first_col)
         if entry:
             entry.focus_set()
+
+    def _update_checkup_summary_label(self):
+        """表示中個体の検診種類ごとの内訳を更新。"""
+        if not hasattr(self, "checkup_summary_label"):
+            return
+        total = len(self.display_rows)
+        if total == 0:
+            self.checkup_summary_label.config(text="表示中: 0頭")
+            return
+
+        preferred_order = [
+            ReproductionCheckupLogic.CHECKUP_FRESH,
+            ReproductionCheckupLogic.CHECKUP_REPRO1,
+            ReproductionCheckupLogic.CHECKUP_REPRO2,
+            ReproductionCheckupLogic.CHECKUP_PREG,
+            ReproductionCheckupLogic.CHECKUP_REPREG,
+            ReproductionCheckupLogic.CHECKUP_PREG2,
+            ReproductionCheckupLogic.CHECKUP_DUE_OVER,
+            ReproductionCheckupLogic.CHECKUP_CHECK,
+            ReproductionCheckupLogic.CHECKUP_HEIFER_REPRO1,
+            ReproductionCheckupLogic.CHECKUP_HEIFER_REPRO2,
+            ReproductionCheckupLogic.CHECKUP_HEIFER_PREG,
+            ReproductionCheckupLogic.CHECKUP_HEIFER_REPREG,
+        ]
+        counts: Dict[str, int] = {}
+        for row in self.display_rows:
+            code = (row.get("checkup_code", "") or "").strip() or "未設定"
+            counts[code] = counts.get(code, 0) + 1
+
+        details: List[str] = []
+        for code in preferred_order:
+            c = counts.pop(code, 0)
+            if c > 0:
+                details.append(f"{code}:{c}頭")
+        for code in sorted(counts.keys()):
+            details.append(f"{code}:{counts[code]}頭")
+
+        text = f"表示中: {total}頭  /  検診種類内訳: " + "、".join(details)
+        self.checkup_summary_label.config(text=text)
 
     def _on_search_id(self, event=None):
         """ID検索機能"""
@@ -1223,6 +1328,43 @@ class ReproductionCheckupInputWindow:
         # 右入力欄のスクロール
         self.input_canvas.yview_moveto(fraction)
 
+    def _ensure_row_visible(self, target_row_index: int):
+        """
+        対象行が可視範囲外のときだけ最小限スクロールする。
+        可視範囲内ならスクロールしない。
+        """
+        total_rows = len(self.display_rows)
+        if total_rows <= 0:
+            return
+        if target_row_index < 0 or target_row_index >= total_rows:
+            return
+
+        # 行高は入力行の固定値（_create_input_entries で 24px）
+        row_height = 24
+        canvas_height = max(1, self.input_canvas.winfo_height())
+        visible_rows = max(1, canvas_height // row_height)
+
+        # 現在の先頭行インデックス（概算）
+        first_frac = self.input_canvas.yview()[0]
+        first_visible_index = int(first_frac * total_rows)
+        last_visible_index = min(total_rows - 1, first_visible_index + visible_rows - 1)
+
+        # 可視範囲内ならスクロール不要
+        if first_visible_index <= target_row_index <= last_visible_index:
+            return
+
+        if target_row_index > last_visible_index:
+            new_first = target_row_index - visible_rows + 1
+        else:
+            new_first = target_row_index
+
+        max_first = max(0, total_rows - visible_rows)
+        new_first = max(0, min(new_first, max_first))
+        fraction = new_first / total_rows if total_rows > 0 else 0
+
+        self.left_tree.yview_moveto(fraction)
+        self.input_canvas.yview_moveto(fraction)
+
     def _highlight_row(self, row_id: str):
         """指定された行全体をハイライト"""
         # 前の行のハイライトを解除
@@ -1266,6 +1408,93 @@ class ReproductionCheckupInputWindow:
                 name = treatment.get("name", "")
                 return name or value
         return value
+
+    def _is_pregnancy_checkup_code(self, checkup_code: str) -> bool:
+        """検診種類が妊娠鑑定系か判定。"""
+        preg_checkup_codes = {
+            ReproductionCheckupLogic.CHECKUP_PREG,
+            ReproductionCheckupLogic.CHECKUP_REPREG,
+            ReproductionCheckupLogic.CHECKUP_PREG2,
+            ReproductionCheckupLogic.CHECKUP_HEIFER_PREG,
+            ReproductionCheckupLogic.CHECKUP_HEIFER_REPREG,
+        }
+        return (checkup_code or "").strip() in preg_checkup_codes
+
+    def _get_treatment_setting(self, treatment_input: str) -> Optional[Dict[str, Any]]:
+        """入力値（コード or 名称）に対応する処置設定を返す。"""
+        value = (treatment_input or "").strip()
+        if not value:
+            return None
+        if value.isdigit():
+            return self.treatments.get(value)
+        value_upper = value.upper()
+        for treatment in self.treatments.values():
+            name = str(treatment.get("name", "")).strip().upper()
+            if name and name == value_upper:
+                return treatment
+        return None
+
+    def _treatment_has_ai_protocol(self, treatment_input: str) -> bool:
+        """処置設定に AI 指示を含むか判定。"""
+        treatment = self._get_treatment_setting(treatment_input)
+        if not treatment:
+            return False
+
+        protocol_candidates = []
+        protocol_candidates.extend(treatment.get("protocols_by_position", []) or [])
+        protocol_candidates.extend(treatment.get("protocols", []) or [])
+        for protocol in protocol_candidates:
+            if not isinstance(protocol, dict):
+                continue
+            instruction = str(protocol.get("instruction", "")).strip().upper()
+            if instruction == "AI":
+                return True
+        return False
+
+    def _validate_repro_checkup_input_row(self, data: Dict[str, Any], inputs: Dict[str, Any]) -> bool:
+        """
+        保存前の整合性チェック。
+        警告表示後、続行する場合は True、保存スキップは False を返す。
+        """
+        exec_code = (inputs.get("exec_code", "") or "").strip()
+        if not exec_code:
+            return True
+
+        cow_id_display = data.get("cow_id", "") or str(data.get("cow_auto_id", ""))
+        checkup_code = (data.get("checkup_code", "") or "").strip()
+        treatment_input = (inputs.get("treatment", "") or "").strip()
+        treatment_name = self._normalize_treatment_value(treatment_input).strip()
+
+        # 1) 妊娠プラス入力なのに、AIにつながる処置が入力されている
+        if (
+            exec_code in self.PREGNANCY_POSITIVE_EXEC_CODES
+            and treatment_input
+            and self._treatment_has_ai_protocol(treatment_input)
+        ):
+            msg = (
+                f"個体ID {cow_id_display}\n"
+                f"実施コード {exec_code}（妊娠プラス）と、AIにつながる処置（{treatment_name or treatment_input}）が同時入力されています。\n\n"
+                "妊娠牛にAIプログラム処置は通常行いません。入力ミスの可能性があります。\n"
+                "このまま登録しますか？"
+            )
+            if not messagebox.askyesno("入力矛盾の警告", msg):
+                return False
+
+        # 2) 妊娠鑑定でないのに妊娠判定コードが入力されている
+        if exec_code in self.PREGNANCY_DIAG_EXEC_CODES and not self._is_pregnancy_checkup_code(checkup_code):
+            msg = (
+                f"個体ID {cow_id_display}\n"
+                f"検診種類「{checkup_code or '（空欄）'}」に対して、実施コード {exec_code}（妊娠判定系）が入力されています。\n\n"
+                "想定される原因:\n"
+                "1) 当日の入力ミス\n"
+                "2) 前回の妊娠マイナス（4/7）が誤診・入力ミスで、実際は妊娠継続\n\n"
+                "2) の場合は、前回の妊娠マイナスイベントをキャンセルし、繁殖検査（3）等へ修正してください。\n"
+                "このまま登録しますか？"
+            )
+            if not messagebox.askyesno("入力矛盾の警告", msg):
+                return False
+
+        return True
 
     def _on_mousewheel(self, event, yview_func):
         """Windows用のマウスホイール処理"""
@@ -1342,6 +1571,8 @@ class ReproductionCheckupInputWindow:
                     return row.get("dai") if row.get("dai") is not None else -1
                 if column == "checkup_code":
                     return row.get("checkup_code") or ""
+                if column == "last_checkup_date":
+                    return row.get("last_checkup_date") or ""
                 if column == "last_checkup_result":
                     return row.get("last_checkup_result") or ""
                 return ""
@@ -1350,7 +1581,7 @@ class ReproductionCheckupInputWindow:
 
         self._render_rows()
 
-    def _build_json_data(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_json_data(self, inputs: Dict[str, Any], event_number: int) -> Dict[str, Any]:
         json_data: Dict[str, Any] = {}
         for key in ["treatment", "uterine_findings", "right_ovary_findings", "left_ovary_findings", "other"]:
             val = inputs.get(key, "")
@@ -1358,6 +1589,16 @@ class ReproductionCheckupInputWindow:
                 val = val.strip()
             if val:
                 json_data[key] = val
+        # イベント辞書どおり cycle_day は 300/301/302（フレッシュ・繁殖検査・妊鑑-）のみ
+        if event_number in (300, 301, 302):
+            cd_raw = inputs.get("cycle_day", "")
+            if isinstance(cd_raw, str):
+                cd_raw = cd_raw.strip()
+            if cd_raw:
+                try:
+                    json_data["cycle_day"] = int(cd_raw)
+                except ValueError:
+                    pass
         # 双子チェックボックスの値を追加（実施コード5または6の場合）
         twin_value = inputs.get("twin", False)
         if isinstance(twin_value, bool) and twin_value:
@@ -1372,8 +1613,10 @@ class ReproductionCheckupInputWindow:
         return json_data
 
     def _on_save(self):
+        """上の表（実施コード・BCS等）と下部の検診訪問メモを一括保存する。"""
         self._sync_inputs_from_widgets()
-        self._save_visit_notes()
+        # 記録欄は画面の内容をそのまま JSON に反映（空にした場合も上書き）
+        self._save_visit_notes(force=True)
         saved_count = 0
         removed_row_ids = set()
         EVENT_BCS = 101  # イベント辞書のBCS
@@ -1411,6 +1654,9 @@ class ReproductionCheckupInputWindow:
 
             exec_code = inputs.get("exec_code", "").strip()
             if not exec_code:
+                continue
+
+            if not self._validate_repro_checkup_input_row(data, inputs):
                 continue
 
             if exec_code == "1":
@@ -1507,10 +1753,10 @@ class ReproductionCheckupInputWindow:
 
             json_data = {}
             if event_number in [300, 301, RuleEngine.EVENT_PDN]:
-                json_data = self._build_json_data(inputs)
+                json_data = self._build_json_data(inputs, event_number)
             elif event_number in [RuleEngine.EVENT_PDP, RuleEngine.EVENT_PDP2, RuleEngine.EVENT_PAGP]:
                 # 妊娠プラスイベント（303, 304, 307）の場合、双子チェックを追加
-                json_data = self._build_json_data(inputs)
+                json_data = self._build_json_data(inputs, event_number)
 
             event_data = {
                 "cow_auto_id": cow_auto_id,
@@ -1563,7 +1809,11 @@ class ReproductionCheckupInputWindow:
                 self.row_data.pop(row_id, None)
             self._render_rows()
 
-        messagebox.showinfo("完了", f"{saved_count}件のイベントを保存しました。")
+        messagebox.showinfo(
+            "保存完了",
+            "検診訪問メモ（記録）を保存しました。\n"
+            f"データベースへのイベント登録: {saved_count} 件（実施コード・BCS 等）。",
+        )
 
     def show(self):
         self.window.wait_window()

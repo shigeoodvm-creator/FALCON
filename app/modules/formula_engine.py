@@ -46,8 +46,8 @@ class FormulaEngine:
     def _load_item_dictionary(self):
         """item_dictionary.json を読み込む（本体 config_default を参照）"""
         if self.item_dict_path is None:
-            app_root = Path(__file__).parent.parent.parent
-            default_path = app_root / "config_default" / "item_dictionary.json"
+            from constants import CONFIG_DEFAULT_DIR
+            default_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
             if default_path.exists():
                 self.item_dict_path = default_path
 
@@ -273,7 +273,28 @@ class FormulaEngine:
             return round(age_months, 1)
         except (ValueError, TypeError):
             return None
-    
+
+    def _calculate_age_at_due_date(self, events: list, cow: Dict[str, Any]) -> Optional[float]:
+        """
+        分娩予定日時点の月齢（生年月日から分娩予定日まで、月単位）
+        """
+        bthd = cow.get("bthd")
+        if not bthd:
+            return None
+        due = self._calculate_due_date(events, cow.get("clvd"))
+        if not due:
+            return None
+        try:
+            birth_date = datetime.strptime(bthd, "%Y-%m-%d")
+            due_dt = datetime.strptime(due, "%Y-%m-%d")
+            days_diff = (due_dt - birth_date).days
+            if days_diff < 0:
+                return None
+            age_months = days_diff / 30.44
+            return round(age_months, 1)
+        except (ValueError, TypeError):
+            return None
+
     def _calculate_age_at_first_calving(self, events: list, cow: Dict[str, Any]) -> Optional[float]:
         """
         初産分娩時の月齢（AGE at First Calving）を計算
@@ -2222,6 +2243,30 @@ class FormulaEngine:
         
         return sorted_events[0].get('event_date')
     
+    def _get_last_introduction_event_date(self, events: list) -> Optional[str]:
+        """
+        イベント履歴から最新の導入イベント（600）の日付を取得する。
+        
+        Args:
+            events: イベントリスト
+        
+        Returns:
+            最新の導入イベント日（YYYY-MM-DD形式）、存在しない場合はNone
+        """
+        intro_events = [
+            e for e in events
+            if e.get('event_number') == 600  # IN（導入）
+            and e.get('event_date')
+        ]
+        if not intro_events:
+            return None
+        sorted_events = sorted(
+            intro_events,
+            key=lambda e: (e.get('event_date', ''), e.get('id', 0)),
+            reverse=True,
+        )
+        return sorted_events[0].get('event_date')
+    
     def _calculate_due_date(self, events: list, clvd: Optional[str]) -> Optional[str]:
         """
         分娩予定日を計算
@@ -2767,6 +2812,175 @@ class FormulaEngine:
             key=lambda e: (e.get('event_date', ''), e.get('id', 0)),
             reverse=True
         )[0]
+
+    def _get_conceiving_ai_et_event_previous_lactation(
+        self, events: list, cow: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        前産次について受胎した AI/ET イベントを1件取得する。
+        日付範囲は previous_clvd <= date < clvd（今産次の CSIR/CSIT と同じ優先ルール）。
+        """
+        current_clvd = cow.get("clvd")
+        if not current_clvd:
+            return None
+        previous_clvd = self._get_previous_calving_date(events, cow, 2)
+        if not previous_clvd or previous_clvd >= current_clvd:
+            return None
+
+        def _in_prev_lact(d: str) -> bool:
+            return bool(d) and previous_clvd <= d < current_clvd
+
+        ai_et_events = [
+            e
+            for e in events
+            if e.get("event_number") in [200, 201]
+            and e.get("event_date")
+            and _in_prev_lact(e.get("event_date", ""))
+        ]
+        if not ai_et_events:
+            return None
+
+        def _outcome(e: Dict[str, Any]) -> Optional[str]:
+            j = e.get("json_data") or {}
+            if isinstance(j, str):
+                try:
+                    j = json.loads(j)
+                except Exception:
+                    j = {}
+            return j.get("outcome")
+
+        events_p = [e for e in ai_et_events if _outcome(e) == "P"]
+        if events_p:
+            return sorted(
+                events_p,
+                key=lambda e: (e.get("event_date", ""), e.get("id", 0)),
+                reverse=True,
+            )[0]
+
+        preg_events = [
+            e
+            for e in events
+            if e.get("event_number") in [303, 304, 307]
+            and e.get("event_date")
+            and _in_prev_lact(e.get("event_date", ""))
+        ]
+        if not preg_events:
+            return None
+        sorted_preg = sorted(preg_events, key=lambda e: (e.get("event_date", ""), e.get("id", 0)))
+        first_preg = sorted_preg[0]
+        first_preg_number = first_preg.get("event_number")
+        first_preg_date = first_preg.get("event_date", "")
+
+        if first_preg_number == 304:
+            j = first_preg.get("json_data") or {}
+            if isinstance(j, str):
+                try:
+                    j = json.loads(j)
+                except Exception:
+                    j = {}
+            ai_event_id = j.get("ai_event_id")
+            if ai_event_id:
+                for ev in ai_et_events:
+                    if ev.get("id") == ai_event_id:
+                        return ev
+
+        ai_et_before = [e for e in ai_et_events if e.get("event_date", "") <= first_preg_date]
+        if not ai_et_before:
+            return None
+        return sorted(
+            ai_et_before,
+            key=lambda e: (e.get("event_date", ""), e.get("id", 0)),
+            reverse=True,
+        )[0]
+
+    def _get_conception_sire_previous_lactation(
+        self, events: list, cow: Dict[str, Any]
+    ) -> Optional[str]:
+        event = self._get_conceiving_ai_et_event_previous_lactation(events, cow)
+        if not event:
+            return None
+        json_data = event.get("json_data") or {}
+        if isinstance(json_data, str):
+            try:
+                json_data = json.loads(json_data)
+            except Exception:
+                json_data = {}
+        sire = json_data.get("sire") or json_data.get("sire_id")
+        if sire:
+            return str(sire).strip()
+        return None
+
+    def _get_conception_insemination_type_previous_lactation(
+        self, events: list, cow: Dict[str, Any]
+    ) -> Optional[str]:
+        event = self._get_conceiving_ai_et_event_previous_lactation(events, cow)
+        if not event:
+            return None
+        json_data = event.get("json_data") or {}
+        if isinstance(json_data, str):
+            try:
+                json_data = json.loads(json_data)
+            except Exception:
+                json_data = {}
+        raw = json_data.get("insemination_type_code") or json_data.get("insemination_type")
+        if raw:
+            s = str(raw).strip()
+            return s if s else None
+        return None
+
+    def _calculate_previous_lactation_breeding_count(
+        self, events: list, cow: Dict[str, Any]
+    ) -> Optional[int]:
+        """
+        前産次の授精回数（BRED と同じ7日ルール・R除外）。
+        範囲: previous_clvd <= AI/ET日 < clvd
+        """
+        current_clvd = cow.get("clvd")
+        if not current_clvd:
+            return None
+        previous_clvd = self._get_previous_calving_date(events, cow, 2)
+        if not previous_clvd or previous_clvd >= current_clvd:
+            return None
+        ai_et_events = [
+            e
+            for e in events
+            if e.get("event_number") in [200, 201]
+            and e.get("event_date")
+            and previous_clvd <= e.get("event_date", "") < current_clvd
+        ]
+        if not ai_et_events:
+            return 0
+        sorted_events = sorted(
+            ai_et_events,
+            key=lambda e: (e.get("event_date", ""), e.get("id", 0)),
+        )
+        count = 0
+        last_date = None
+        for event in sorted_events:
+            event_date = event.get("event_date")
+            if not event_date:
+                continue
+            json_data = event.get("json_data") or {}
+            if isinstance(json_data, str):
+                try:
+                    json_data = json.loads(json_data)
+                except Exception:
+                    json_data = {}
+            if json_data.get("outcome") == "R":
+                continue
+            try:
+                current_date = datetime.strptime(event_date, "%Y-%m-%d")
+                if last_date is None:
+                    count += 1
+                    last_date = current_date
+                else:
+                    days_diff = (current_date - last_date).days
+                    if days_diff >= 7:
+                        count += 1
+                        last_date = current_date
+            except (ValueError, TypeError):
+                continue
+        return count
     
     def _get_conception_sire(self, events: list, cow: Dict[str, Any]) -> Optional[str]:
         """
@@ -3293,6 +3507,107 @@ class FormulaEngine:
         
         return None
     
+    def _collect_bcs_dim_pairs_current_lactation(
+        self, events: list, cow: Dict[str, Any]
+    ) -> list:
+        """
+        今産次の BCS イベント（101）ごとに (bcs値, DIM) を集める。
+        産次の範囲は max_linear_score と同様（event_lact 優先、なければ分娩日 clvd 以降）。
+        """
+        current_lact = cow.get("lact")
+        if current_lact is None:
+            return []
+        clvd = cow.get("clvd")
+        if not clvd:
+            return []
+        bcs_events = [
+            e for e in events
+            if e.get("event_number") == 101 and e.get("event_date")
+        ]
+        if not bcs_events:
+            return []
+        lact_events = []
+        for event in bcs_events:
+            event_lact = event.get("event_lact")
+            event_date = event.get("event_date")
+            if event_lact is not None:
+                if event_lact == current_lact:
+                    lact_events.append(event)
+            else:
+                if event_date and event_date >= clvd:
+                    lact_events.append(event)
+        pairs = []
+        cow_auto_id = cow.get("auto_id")
+        for event in lact_events:
+            json_data = event.get("json_data") or {}
+            if isinstance(json_data, str):
+                try:
+                    json_data = json.loads(json_data)
+                except Exception:
+                    json_data = {}
+            bcs_raw = json_data.get("bcs")
+            if bcs_raw is None:
+                continue
+            try:
+                bcs_val = float(bcs_raw)
+            except (ValueError, TypeError):
+                continue
+            dim = None
+            event_dim = event.get("event_dim")
+            if event_dim is not None:
+                try:
+                    dim = int(event_dim)
+                except (ValueError, TypeError):
+                    dim = None
+            if dim is None and cow_auto_id is not None:
+                dim = self._compute_event_dim_for_event(
+                    cow_auto_id, event.get("event_date", ""), 101
+                )
+            if dim is None:
+                dim = self._calculate_dim_from_date(clvd, event.get("event_date", ""))
+            if dim is None:
+                continue
+            pairs.append((bcs_val, dim))
+        return pairs
+
+    def _calculate_max_bcs_current_lactation(self, events: list, cow: Dict[str, Any]) -> Optional[float]:
+        """今産次の BCS（101）のうち最も高い値。イベントがなければ None。"""
+        pairs = self._collect_bcs_dim_pairs_current_lactation(events, cow)
+        if not pairs:
+            return None
+        return max(p[0] for p in pairs)
+
+    def _calculate_max_bcs_dim_current_lactation(self, events: list, cow: Dict[str, Any]) -> Optional[int]:
+        """
+        今産次で最も高い BCS を記録したときの DIM。
+        同じ最高 BCS が複数ある場合は、そのうち DIM が最も大きい（長い）もの。
+        """
+        pairs = self._collect_bcs_dim_pairs_current_lactation(events, cow)
+        if not pairs:
+            return None
+        max_bcs = max(p[0] for p in pairs)
+        tied_dims = [p[1] for p in pairs if p[0] == max_bcs]
+        return max(tied_dims)
+
+    def _calculate_min_bcs_current_lactation(self, events: list, cow: Dict[str, Any]) -> Optional[float]:
+        """今産次の BCS（101）のうち最も低い値。イベントがなければ None。"""
+        pairs = self._collect_bcs_dim_pairs_current_lactation(events, cow)
+        if not pairs:
+            return None
+        return min(p[0] for p in pairs)
+
+    def _calculate_min_bcs_dim_current_lactation(self, events: list, cow: Dict[str, Any]) -> Optional[int]:
+        """
+        今産次で最も低い BCS を記録したときの DIM。
+        同じ最低 BCS が複数ある場合は、そのうち DIM が最も小さい（短い）もの。
+        """
+        pairs = self._collect_bcs_dim_pairs_current_lactation(events, cow)
+        if not pairs:
+            return None
+        min_bcs = min(p[0] for p in pairs)
+        tied_dims = [p[1] for p in pairs if p[0] == min_bcs]
+        return min(tied_dims)
+
     def _get_last_mastitis_date(self, events: list) -> Optional[str]:
         """
         直近の乳房炎イベントの日付を取得
@@ -3466,7 +3781,69 @@ class FormulaEngine:
         latest_event = sorted_events[0]
         note = latest_event.get('note')
         return note.strip() if note else None
-    
+
+    def _get_latest_blv_positive(self, events: list) -> Optional[int]:
+        """
+        最新の BLV結果イベント（208）に基づき 1=陽性 0=陰性 を返す。
+        json_data.blv_result が「未検査」または未設定のときは None（項目 BLVP は空欄＝未検査と判別可能）。
+
+        旧データ: blv_positive のみのイベントは True→1, False→0。
+
+        Args:
+            events: イベントリスト
+
+        Returns:
+            1=陽性、0=陰性、未検査・イベントなしは None
+        """
+        EVENT_BLV = 208
+        blv_events = [
+            e for e in events
+            if e.get("event_number") == EVENT_BLV and e.get("event_date")
+        ]
+        if not blv_events:
+            return None
+        sorted_events = sorted(
+            blv_events,
+            key=lambda e: (e.get("event_date", ""), e.get("id", 0)),
+            reverse=True,
+        )
+        jd = sorted_events[0].get("json_data") or {}
+        if isinstance(jd, str):
+            try:
+                jd = json.loads(jd)
+            except Exception:
+                jd = {}
+
+        raw = jd.get("blv_result")
+        if raw is not None and str(raw).strip() != "":
+            s = str(raw).strip()
+            if s in ("陽性", "positive", "pos", "1", "１"):
+                return 1
+            if s in ("陰性", "negative", "neg", "0", "０"):
+                return 0
+            if s in ("未検査", "untested", "none"):
+                return None
+            sl = s.lower()
+            if sl in ("true", "yes"):
+                return 1
+            if sl in ("false", "no"):
+                return 0
+            return None
+
+        # 旧形式: blv_positive のみ
+        bp = jd.get("blv_positive")
+        if bp is True or bp == 1:
+            return 1
+        if bp is False or bp == 0:
+            return 0
+        if isinstance(bp, str):
+            t = bp.strip().lower()
+            if t in ("true", "1", "yes", "陽性", "positive"):
+                return 1
+            if t in ("false", "0", "no", "陰性", "negative"):
+                return 0
+        return None
+
     def _calculate_days_from_last_reproduction_check(self, events: list) -> Optional[int]:
         """
         直近検診日からの日数を計算
@@ -3631,7 +4008,105 @@ class FormulaEngine:
         if milk_yields:
             return max(milk_yields)
         return None
-    
+
+    def _get_previous_lactation_milk_test_events(
+        self, events: list, cow: Dict[str, Any]
+    ) -> list:
+        """
+        前産次に属する乳検（601）イベント。
+        前産次の分娩日以上・今産次の分娩日未満（previous_clvd <= date < clvd）。
+        """
+        current_clvd = cow.get("clvd")
+        if not current_clvd:
+            return []
+        previous_clvd = self._get_previous_calving_date(events, cow, 2)
+        if not previous_clvd:
+            return []
+        if previous_clvd >= current_clvd:
+            return []
+        return [
+            e
+            for e in events
+            if e.get("event_number") == 601
+            and e.get("event_date")
+            and previous_clvd <= e.get("event_date", "") < current_clvd
+        ]
+
+    def _calculate_previous_lact_max_milk_yield(
+        self, events: list, cow: Dict[str, Any]
+    ) -> Optional[float]:
+        """前産次の乳検（601）の milk_yield の最大値。"""
+        lact_events = self._get_previous_lactation_milk_test_events(events, cow)
+        if not lact_events:
+            return None
+        milk_yields = []
+        for event in lact_events:
+            json_data = event.get("json_data") or {}
+            if isinstance(json_data, str):
+                try:
+                    json_data = json.loads(json_data)
+                except Exception:
+                    json_data = {}
+            milk_yield = json_data.get("milk_yield")
+            if milk_yield is not None:
+                try:
+                    milk_yields.append(float(milk_yield))
+                except (ValueError, TypeError):
+                    continue
+        if milk_yields:
+            return max(milk_yields)
+        return None
+
+    def _calculate_previous_lact_min_milk_yield(
+        self, events: list, cow: Dict[str, Any]
+    ) -> Optional[float]:
+        """前産次の乳検（601）の milk_yield の最小値。"""
+        lact_events = self._get_previous_lactation_milk_test_events(events, cow)
+        if not lact_events:
+            return None
+        milk_yields = []
+        for event in lact_events:
+            json_data = event.get("json_data") or {}
+            if isinstance(json_data, str):
+                try:
+                    json_data = json.loads(json_data)
+                except Exception:
+                    json_data = {}
+            milk_yield = json_data.get("milk_yield")
+            if milk_yield is not None:
+                try:
+                    milk_yields.append(float(milk_yield))
+                except (ValueError, TypeError):
+                    continue
+        if milk_yields:
+            return min(milk_yields)
+        return None
+
+    def _calculate_previous_lact_max_linear_score(
+        self, events: list, cow: Dict[str, Any]
+    ) -> Optional[float]:
+        """前産次の乳検（601）の ls（リニアスコア）の最大値。"""
+        lact_events = self._get_previous_lactation_milk_test_events(events, cow)
+        if not lact_events:
+            return None
+        scores = []
+        for event in lact_events:
+            json_data = event.get("json_data") or {}
+            if isinstance(json_data, str):
+                try:
+                    json_data = json.loads(json_data)
+                except Exception:
+                    json_data = {}
+            ls_value = json_data.get("ls")
+            if ls_value is not None:
+                try:
+                    scores.append(float(ls_value))
+                except (ValueError, TypeError):
+                    continue
+        if scores:
+            return max(scores)
+        return None
+
     def _calculate_max_milk_yield_dim(self, events: list, cow: Dict[str, Any]) -> Optional[int]:
         """
         その産次の最高乳量時のDIMを計算
@@ -3711,6 +4186,67 @@ class FormulaEngine:
         
         return max_milk_yield_dim
     
+    def _collect_milk_test_ls_dim_pairs_current_lactation(
+        self, events: list, cow: Dict[str, Any]
+    ) -> list:
+        """
+        今産次の乳検（601）ごとに (ls, DIM) を集める。DIM は event_dim → 計算 → clvd からの日数の順。
+        event_lact 優先、なければ clvd 以降（max_linear_score と同じ産次範囲）。
+        """
+        current_lact = cow.get("lact")
+        if current_lact is None:
+            return []
+        clvd = cow.get("clvd")
+        if not clvd:
+            return []
+        milk_test_events = [
+            e for e in events
+            if e.get("event_number") == 601 and e.get("event_date")
+        ]
+        if not milk_test_events:
+            return []
+        lact_events = []
+        for event in milk_test_events:
+            event_lact = event.get("event_lact")
+            event_date = event.get("event_date")
+            if event_lact is not None:
+                if event_lact == current_lact:
+                    lact_events.append(event)
+            else:
+                if event_date and event_date >= clvd:
+                    lact_events.append(event)
+        pairs = []
+        cow_auto_id = cow.get("auto_id")
+        for event in lact_events:
+            json_data = event.get("json_data") or {}
+            if isinstance(json_data, str):
+                try:
+                    json_data = json.loads(json_data)
+                except Exception:
+                    json_data = {}
+            ls_value = json_data.get("ls")
+            if ls_value is None:
+                continue
+            try:
+                ls_float = float(ls_value)
+            except (ValueError, TypeError):
+                continue
+            dim = None
+            event_dim = event.get("event_dim")
+            if event_dim is not None:
+                try:
+                    dim = int(event_dim)
+                except (ValueError, TypeError):
+                    dim = None
+            if dim is None and cow_auto_id is not None:
+                dim = self._compute_event_dim_for_event(
+                    cow_auto_id, event.get("event_date", ""), 601
+                )
+            if dim is None:
+                dim = self._calculate_dim_from_date(clvd, event.get("event_date", ""))
+            pairs.append((ls_float, dim))
+        return pairs
+
     def _calculate_max_linear_score(self, events: list, cow: Dict[str, Any]) -> Optional[float]:
         """
         その産次の最大リニアスコアを計算
@@ -3725,161 +4261,26 @@ class FormulaEngine:
         Returns:
             最大リニアスコア（浮動小数点数）、存在しない場合はNone
         """
-        # 現在の産次を取得
-        current_lact = cow.get('lact')
-        if current_lact is None:
+        pairs = self._collect_milk_test_ls_dim_pairs_current_lactation(events, cow)
+        if not pairs:
             return None
-        
-        # 分娩日を取得
-        clvd = cow.get('clvd')
-        if not clvd:
-            return None
-        
-        # 乳検イベント（601）を取得
-        milk_test_events = [
-            e for e in events
-            if e.get('event_number') == 601  # 乳検
-            and e.get('event_date')
-        ]
-        
-        if not milk_test_events:
-            return None
-        
-        # event_lactフィールドがある場合はそれを使用して産次でフィルタ
-        lact_events = []
-        for event in milk_test_events:
-            event_lact = event.get('event_lact')
-            event_date = event.get('event_date')
-            
-            # event_lactがある場合は、現在の産次と一致するもののみ
-            if event_lact is not None:
-                if event_lact == current_lact:
-                    lact_events.append(event)
-            else:
-                # event_lactがない場合は、分娩日以降の乳検を対象とする（後方互換性のため）
-                if event_date and event_date >= clvd:
-                    lact_events.append(event)
-        
-        if not lact_events:
-            return None
-        
-        # すべての乳検イベントからリニアスコアを取得
-        linear_scores = []
-        for event in lact_events:
-            json_data = event.get('json_data') or {}
-            
-            # json_dataが文字列の場合はパース
-            if isinstance(json_data, str):
-                try:
-                    json_data = json.loads(json_data)
-                except:
-                    json_data = {}
-            
-            ls_value = json_data.get('ls')
-            if ls_value is not None:
-                try:
-                    linear_scores.append(float(ls_value))
-                except (ValueError, TypeError):
-                    continue
-        
-        # 最大値を返す
-        if linear_scores:
-            return max(linear_scores)
-        
-        return None
+        return max(p[0] for p in pairs)
     
     def _calculate_max_linear_score_dim(self, events: list, cow: Dict[str, Any]) -> Optional[int]:
         """
         その産次の最大リニアスコア時のDIMを計算
         
-        現在の産次（lact）に対応する乳検イベント（601）から、最大リニアスコアを記録したイベントのevent_dimを取得
-        event_lactフィールドがある場合はそれを使用し、ない場合は分娩日（clvd）以降の乳検を対象とする
-        
-        Args:
-            events: イベントリスト
-            cow: 牛データ
-        
-        Returns:
-            最大リニアスコア時のDIM（整数）、存在しない場合はNone
+        最大リニアスコアを記録した乳検の DIM。
+        同じ最大 ls が複数ある場合は、そのうち DIM が最も大きい（長い）もの。
         """
-        # 現在の産次を取得
-        current_lact = cow.get('lact')
-        if current_lact is None:
+        pairs = self._collect_milk_test_ls_dim_pairs_current_lactation(events, cow)
+        if not pairs:
             return None
-        
-        # 分娩日を取得
-        clvd = cow.get('clvd')
-        if not clvd:
+        max_ls = max(p[0] for p in pairs)
+        dims = [p[1] for p in pairs if p[0] == max_ls and p[1] is not None]
+        if not dims:
             return None
-        
-        # 乳検イベント（601）を取得
-        milk_test_events = [
-            e for e in events
-            if e.get('event_number') == 601  # 乳検
-            and e.get('event_date')
-        ]
-        
-        if not milk_test_events:
-            return None
-        
-        # event_lactフィールドがある場合はそれを使用して産次でフィルタ
-        lact_events = []
-        for event in milk_test_events:
-            event_lact = event.get('event_lact')
-            event_date = event.get('event_date')
-            
-            # event_lactがある場合は、現在の産次と一致するもののみ
-            if event_lact is not None:
-                if event_lact == current_lact:
-                    lact_events.append(event)
-            else:
-                # event_lactがない場合は、分娩日以降の乳検を対象とする（後方互換性のため）
-                if event_date and event_date >= clvd:
-                    lact_events.append(event)
-        
-        if not lact_events:
-            return None
-        
-        # 最大リニアスコアとそのDIMを追跡
-        max_linear_score = None
-        max_linear_score_dim = None
-        
-        for event in lact_events:
-            json_data = event.get('json_data') or {}
-            
-            # json_dataが文字列の場合はパース
-            if isinstance(json_data, str):
-                try:
-                    json_data = json.loads(json_data)
-                except:
-                    json_data = {}
-            
-            ls_value = json_data.get('ls')
-            if ls_value is not None:
-                try:
-                    ls_float = float(ls_value)
-                    # 最大リニアスコアを更新
-                    if max_linear_score is None or ls_float > max_linear_score:
-                        max_linear_score = ls_float
-                        # event_dimを取得（NULLの場合はその場で計算）
-                        event_dim = event.get('event_dim')
-                        if event_dim is not None:
-                            try:
-                                max_linear_score_dim = int(event_dim)
-                            except (ValueError, TypeError):
-                                pass
-                        else:
-                            cow_auto_id = cow.get('auto_id')
-                            if cow_auto_id is not None:
-                                dim = self._compute_event_dim_for_event(
-                                    cow_auto_id, event.get('event_date', ''), 601
-                                )
-                                if dim is not None:
-                                    max_linear_score_dim = dim
-                except (ValueError, TypeError):
-                    continue
-        
-        return max_linear_score_dim
+        return max(dims)
     
     def _get_previous_milk_test_value(self, events: list, cow: Dict[str, Any], field_name: str) -> Optional[float]:
         """
@@ -4445,7 +4846,55 @@ class FormulaEngine:
         # 最初の乳房炎イベント（初回）の日付を取得
         first_mastitis = sorted_events[0]
         return first_mastitis.get('event_date')
-    
+
+    def _count_mastitis_events_current_lactation(self, events: list, cow: Dict[str, Any]) -> Optional[int]:
+        """
+        今産次における乳房炎イベント（400）の件数。
+        分娩日（clvd）以降の乳房炎を数える（FMAST / FMASTD と同じ範囲）。
+        """
+        clvd = cow.get("clvd")
+        if not clvd:
+            return None
+        mastitis_events = [
+            e
+            for e in events
+            if e.get("event_number") == 400
+            and e.get("event_date")
+            and e.get("event_date", "") >= clvd
+        ]
+        return len(mastitis_events)
+
+    def _count_milk_test_ls_ge_5_current_lactation(self, events: list, cow: Dict[str, Any]) -> Optional[int]:
+        """
+        今産次の乳検（601）のうち、リニアスコア（ls）が 5 以上の回数。
+        分娩日（clvd）以降の乳検のみ対象（nth 乳検と同じ産次範囲）。
+        """
+        clvd = cow.get("clvd")
+        if not clvd:
+            return None
+        n = 0
+        for e in events:
+            if e.get("event_number") != 601:
+                continue
+            if not e.get("event_date") or e.get("event_date", "") < clvd:
+                continue
+            jd = e.get("json_data") or {}
+            if isinstance(jd, str):
+                try:
+                    jd = json.loads(jd)
+                except Exception:
+                    jd = {}
+            ls_raw = jd.get("ls")
+            if ls_raw is None:
+                continue
+            try:
+                ls_val = float(ls_raw)
+            except (ValueError, TypeError):
+                continue
+            if ls_val >= 5.0:
+                n += 1
+        return n
+
     def _calculate_next_estrus_date(self, events: list, cow: Dict[str, Any] = None) -> Optional[str]:
         """
         直近の授精から21日後の発情予定日を計算
@@ -4671,6 +5120,7 @@ class FormulaEngine:
                 "latest_event_value": lambda en, k: self.latest_event_value(en, k),  # latest_event_value を利用可能に
                 "age": lambda bthd: self._calculate_age(bthd),  # AGE 計算関数
                 "age_at_calving": lambda bthd, clvd: self._calculate_age_at_calving(bthd, clvd),  # AGECLV 計算関数
+                "age_at_due_date": lambda evs, cw: self._calculate_age_at_due_date(evs, cw),  # AGEDUE
                 "age_at_first_calving": lambda evs, cw: self._calculate_age_at_first_calving(evs, cw),  # AGEFCLV 計算関数
                 "calf_info_by_lact": lambda evs, cw, lact: self._get_calf_info_by_lact(evs, cw, lact, cow_auto_id),  # CALF1/CALF2/CALF3 計算関数
                 "previous_calving_date": lambda evs, cw, lact: self._get_previous_calving_date(evs, cw, lact),  # 前産次の分娩日 計算関数
@@ -4692,6 +5142,7 @@ class FormulaEngine:
                 "latest_event_number": lambda evs: self._get_latest_event_number(evs),  # LEVNT 計算関数
                 "days_after_insemination": lambda evs: self._calculate_days_after_insemination(evs),  # DAI 計算関数
                 "last_ai_date": lambda evs: self._get_last_ai_date(evs),  # LASTAI 計算関数
+                "last_introduction_event_date": lambda evs: self._get_last_introduction_event_date(evs),  # INTROD 導入日
                 "due_date": lambda evs, clvd: self._calculate_due_date(evs, clvd),  # DUE 計算関数
                 "due_date_minus_60": lambda evs, clvd: self._calculate_due_date_minus_days(evs, clvd, 60),  # DUEM60 計算関数
                 "due_date_minus_40": lambda evs, clvd: self._calculate_due_date_minus_days(evs, clvd, 40),  # DUEM40 計算関数
@@ -4709,12 +5160,17 @@ class FormulaEngine:
                 "agefai": lambda evs, cw: self._calculate_agefai(evs, cw),  # AGEFAI 計算関数
                 "last_bcs": lambda evs: self._get_last_bcs(evs),  # BCS 計算関数
                 "previous_bcs": lambda evs: self._get_previous_bcs(evs),  # PBCS 計算関数
+                "max_bcs_current_lactation": lambda evs, cw: self._calculate_max_bcs_current_lactation(evs, cw),  # BCSMAX
+                "max_bcs_dim_current_lactation": lambda evs, cw: self._calculate_max_bcs_dim_current_lactation(evs, cw),  # BCSMAXD
+                "min_bcs_current_lactation": lambda evs, cw: self._calculate_min_bcs_current_lactation(evs, cw),  # BCSMIN
+                "min_bcs_dim_current_lactation": lambda evs, cw: self._calculate_min_bcs_dim_current_lactation(evs, cw),  # BCSMIND
                 "last_mastitis_date": lambda evs: self._get_last_mastitis_date(evs),  # LMAST 計算関数
                 "last_mastitis_dim": lambda evs, cw: self._calculate_last_mastitis_dim(evs, cw),  # LMASTD 計算関数
                 "days_from_last_mastitis": lambda evs: self._calculate_days_from_last_mastitis(evs),  # DMAST 計算関数
                 "last_lame_date": lambda evs: self._get_last_lame_date(evs),  # LLAME 計算関数
                 "days_from_last_lame": lambda evs: self._calculate_days_from_last_lame(evs),  # DLAME 計算関数
                 "last_lame_note": lambda evs: self._get_last_lame_note(evs),  # LLAMEN 計算関数
+                "latest_blv_positive": lambda evs: self._get_latest_blv_positive(evs),  # BLVP（最新BLV結果208）
                 "days_from_last_reproduction_check": lambda evs: self._calculate_days_from_last_reproduction_check(evs),  # DREPRO 計算関数
                 "milk_test_value_by_month_1": lambda evs, cw, field: self._get_milk_test_value_by_month(evs, cw, field, None, 1),  # 任意月の乳検データ1 計算関数
                 "milk_test_value_by_month_2": lambda evs, cw, field: self._get_milk_test_value_by_month(evs, cw, field, None, 2),  # 任意月の乳検データ2 計算関数
@@ -4724,16 +5180,21 @@ class FormulaEngine:
                 "linear_score_before_dry": lambda evs, cw: self._get_linear_score_before_dry(evs, cw),  # DRYLS 計算関数
                 "previous_dry_linear_score": lambda evs, cw: self._get_previous_dry_linear_score(evs, cw),  # PDRYLS 計算関数
                 "milk_test_date_before_dry": lambda evs, cw: self._get_milk_test_date_before_dry(evs, cw),  # DRYTD 計算関数
-                "nth_milk_test_value": lambda evs, cw, field, n: self._get_nth_milk_test_value(evs, cw, field, n),  # 1STBHB/2NDBHB/3RDBHB/LS1ST/LS2ND/LS3RD 計算関数
+                "nth_milk_test_value": lambda evs, cw, field, n: self._get_nth_milk_test_value(evs, cw, field, n),  # 1STBHB/2NDBHB/3RDBHB/LS1ST/LS2ND/LS3RD/SCC1ST/SCC2ND/SCC3RD 計算関数
                 "last_milk_test_date": lambda evs, cw: self._get_last_milk_test_date(evs, cw),  # TDATE 計算関数
                 "last_milk_test_dim": lambda evs, cw: self._get_last_milk_test_dim(evs, cw),  # TDIM 計算関数
                 "nth_milk_test_dim": lambda evs, cw, n: self._get_nth_milk_test_dim(evs, cw, n),  # 1STTDIM 計算関数
                 "next_estrus_date": lambda evs, cw: self._calculate_next_estrus_date(evs, cw),  # 次回発情予定日 計算関数
                 "first_mastitis_dim": lambda evs, cw: self._calculate_first_mastitis_dim(evs, cw),  # FMASTD 計算関数
                 "first_mastitis_date": lambda evs, cw: self._get_first_mastitis_date(evs, cw),  # FMAST 計算関数
+                "mastitis_count_current_lactation": lambda evs, cw: self._count_mastitis_events_current_lactation(evs, cw),  # MASTCT
+                "milk_test_ls_ge5_count": lambda evs, cw: self._count_milk_test_ls_ge_5_current_lactation(evs, cw),  # LS5CT
                 "conception_date": lambda evs, cw: self._calculate_conception_date(evs, cw),  # CONCDT 計算関数
                 "conception_sire": lambda evs, cw: self._get_conception_sire(evs, cw),  # CSIR 受胎SIRE 計算関数
                 "conception_insemination_type": lambda evs, cw: self._get_conception_insemination_type(evs, cw),  # CSIT 受胎授精種類 計算関数
+                "conception_sire_previous_lactation": lambda evs, cw: self._get_conception_sire_previous_lactation(evs, cw),  # PLCSIR
+                "conception_insemination_type_previous_lactation": lambda evs, cw: self._get_conception_insemination_type_previous_lactation(evs, cw),  # PLCSIT
+                "previous_lactation_breeding_count": lambda evs, cw: self._calculate_previous_lactation_breeding_count(evs, cw),  # PLBRED
                 "twin_flag": lambda evs, cw: self._calculate_twin_flag(evs, cw),  # TWIN 計算関数
                 "fetus_dairy_female_flag": lambda evs, cw: self._calculate_fetus_dairy_female_flag(evs, cw),  # FDMF 胎子乳用メスフラグ
                 "fetus_sex_determination": lambda evs, cw: self._calculate_fetus_sex_determination(evs, cw),  # FSD 胎子雌雄判別
@@ -4747,6 +5208,9 @@ class FormulaEngine:
                 "ai_interval": lambda evs: self._calculate_ai_interval(evs),  # 授精間隔 計算関数
                 "max_milk_yield": lambda evs, cw: self._calculate_max_milk_yield(evs, cw),  # 最高乳量 計算関数
                 "max_milk_yield_dim": lambda evs, cw: self._calculate_max_milk_yield_dim(evs, cw),  # 最高乳量時のDIM 計算関数
+                "previous_lact_max_milk_yield": lambda evs, cw: self._calculate_previous_lact_max_milk_yield(evs, cw),  # PLMAXMIL
+                "previous_lact_min_milk_yield": lambda evs, cw: self._calculate_previous_lact_min_milk_yield(evs, cw),  # PLMINMIL
+                "previous_lact_max_linear_score": lambda evs, cw: self._calculate_previous_lact_max_linear_score(evs, cw),  # PLMAXLS
                 "max_linear_score": lambda evs, cw: self._calculate_max_linear_score(evs, cw),  # 最大リニアスコア 計算関数
                 "max_linear_score_dim": lambda evs, cw: self._calculate_max_linear_score_dim(evs, cw),  # 最大リニアスコア時のDIM 計算関数
             }

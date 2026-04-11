@@ -47,8 +47,8 @@ class ReproductionCheckupWindow:
         if item_dictionary_path:
             self.item_dict_path = item_dictionary_path
         else:
-            app_root = Path(__file__).parent.parent.parent
-            self.item_dict_path = app_root / "config_default" / "item_dictionary.json"
+            from constants import CONFIG_DEFAULT_DIR
+            self.item_dict_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
         self.settings_manager = SettingsManager(self.farm_path)
         self.checkup_logic = ReproductionCheckupLogic(db_handler, event_dictionary_path)
         # RuleEngine（個体カード表示用）

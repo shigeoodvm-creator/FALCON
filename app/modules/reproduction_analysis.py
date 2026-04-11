@@ -5,7 +5,7 @@ FALCON2 - 繁殖分析（DC305互換）
 
 import json
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
@@ -167,6 +167,19 @@ class ReproductionAnalysis:
         except (ValueError, TypeError):
             return None
 
+    def _metrics_on_or_after_registration(self, cow: Dict[str, Any], reference_date: datetime) -> bool:
+        """
+        繁殖指標の集計起点（cow.entr 登録日）以降の基準日か。
+        entr が未設定のときは従来どおり True（既存データ互換）。
+        """
+        entr = (cow.get('entr') or '').strip()
+        if not entr:
+            return True
+        entr_dt = self._parse_date(entr)
+        if entr_dt is None:
+            return True
+        return reference_date >= entr_dt
+
     def _get_cycle_events(self, all_events: List[Dict[str, Any]],
                           cycle: Cycle) -> Tuple[List, List]:
         """
@@ -210,13 +223,16 @@ class ReproductionAnalysis:
         cycle_start = datetime.strptime(cycle.start_date, '%Y-%m-%d')
         before_cycle_events, _ = self._get_cycle_events(all_events, cycle)
 
+        cow = self.db.get_cow_by_auto_id(cow_auto_id)
+        if cow and not self._metrics_on_or_after_registration(cow, cycle_start):
+            return False
+
         # 1. サイクル開始前に除籍・繁殖停止されている場合は除外
         for event in before_cycle_events:
             if event.get('event_number') in [self.EVENT_SOLD, self.EVENT_DEAD, self.EVENT_STOPR]:
                 return False
 
         # 2. VWPチェック（分娩からの日数 < VWP なら除外）
-        cow = self.db.get_cow_by_auto_id(cow_auto_id)
         if not cow:
             return False
 
@@ -461,7 +477,8 @@ class ReproductionAnalysis:
     # ------------------------------------------------------------------
 
     def analyze_by_dim(self, period_start: Optional[str], period_end: Optional[str],
-                       n_ranges: int = 10) -> List[DimPrResult]:
+                       n_ranges: int = 10,
+                       cow_filter: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[DimPrResult]:
         """
         DIMレンジ別妊娠率を分析（DC305 Bredsumer互換）
 
@@ -472,12 +489,16 @@ class ReproductionAnalysis:
             period_start: 分析期間開始（YYYY-MM-DD、Noneの場合は制限なし）
             period_end:   分析期間終了（YYYY-MM-DD、Noneの場合は今日）
             n_ranges:     DIMレンジ数（デフォルト10）
+            cow_filter:   省略可。経産牛（lact>=1）に対し、True の牛だけを集計に含める。
 
         Returns:
             DimPrResultリスト（DIMレンジ昇順）
         """
         dim_ranges = self.generate_dim_ranges(n_ranges=n_ranges)
-        cows = self.db.get_all_cows()
+        # 経産牛のみ対象（未経産牛 lact=0 or None は除外）
+        cows = [c for c in self.db.get_all_cows() if (c.get('lact') or 0) >= 1]
+        if cow_filter:
+            cows = [c for c in cows if cow_filter(c)]
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
         ps_dt = self._parse_date(period_start) if period_start else None
@@ -516,6 +537,10 @@ class ReproductionAnalysis:
                     window_end = min(today, pe_dt) if pe_dt else today
                 else:
                     window_end = clvd_dt + timedelta(days=dim_end)
+
+                # 登録日（entr）より前のウィンドウは繁殖指標の母数に含めない
+                if not self._metrics_on_or_after_registration(cow, window_start):
+                    continue
 
                 # ウィンドウが今日より未来 → スキップ
                 if window_start > today:
@@ -620,19 +645,126 @@ class ReproductionAnalysis:
     # メイン分析エントリポイント
     # ------------------------------------------------------------------
 
-    def analyze(self, period_start: Optional[str], period_end: Optional[str]) -> List[ReproResult]:
+    def get_cycle_cow_details(self, cycle: Cycle, cows: List[Dict[str, Any]],
+                              today: datetime) -> List[Dict[str, Any]]:
         """
-        繁殖分析を実行
+        サイクル内の繁殖対象個体の詳細リストを返す（ドリルダウン用）
+
+        Returns:
+            list of dict: auto_id, cow_id, lact, dim, category
+            category: '未授精' | '授精済(未確定)' | '空胎' | '妊娠' | '流産'
+        """
+        cycle_start = datetime.strptime(cycle.start_date, '%Y-%m-%d')
+        cycle_end = datetime.strptime(cycle.end_date, '%Y-%m-%d')
+        recent_cycle = (today - cycle_end).days < self.PREG_CONFIRM_DAYS
+
+        details = []
+        for cow in cows:
+            cow_auto_id = cow.get('auto_id')
+            if not cow_auto_id:
+                continue
+
+            all_events = self.db.get_events_by_cow(cow_auto_id, include_deleted=False)
+
+            if not self.is_breeding_eligible(cow_auto_id, cycle, all_events):
+                continue
+
+            # DIM計算（サイクル開始日基準）
+            clvd = cow.get('clvd')
+            dim = ''
+            if clvd:
+                clvd_dt = self._parse_date(clvd)
+                if clvd_dt:
+                    dim = (cycle_start - clvd_dt).days
+
+            bred_count = self.count_bred(cow_auto_id, cycle, all_events)
+
+            if recent_cycle or not self._is_preg_eligible_cow(cow_auto_id, cycle, all_events):
+                category = '授精済(未確定)' if bred_count > 0 else '未授精'
+            else:
+                preg, loss = self._count_preg_and_loss(cow_auto_id, cycle, all_events)
+                if loss == 1:
+                    category = '流産'
+                elif preg == 1:
+                    category = '妊娠'
+                elif bred_count > 0:
+                    category = '空胎'
+                else:
+                    category = '未授精'
+
+            # サイクル内の最後の非R授精イベントを取得
+            _, cycle_events = self._get_cycle_events(all_events, cycle)
+            cycle_ais = [
+                e for e in cycle_events
+                if e.get('event_number') in [self.EVENT_AI, self.EVENT_ET]
+                and self._parse_json_data(e.get('json_data')).get('outcome') != 'R'
+            ]
+            last_ai = cycle_ais[-1] if cycle_ais else None
+            ai_jd = self._parse_json_data(last_ai.get('json_data')) if last_ai else {}
+
+            sire = ai_jd.get('sire', '') or ''
+            technician_code = (ai_jd.get('technician') or
+                               ai_jd.get('technician_code', '') or '')
+            ai_type_code = (ai_jd.get('type') or
+                            ai_jd.get('ai_type') or
+                            ai_jd.get('insemination_type') or
+                            ai_jd.get('inseminationType') or
+                            ai_jd.get('insemination_type_code') or
+                            ai_jd.get('inseminationTypeCode') or '')
+
+            # 現泌乳期の累積授精回数（最終分娩以降・サイクル終了まで、非R）
+            last_calv_dt = None
+            for ev in sorted(all_events, key=lambda e: e.get('event_date', '')):
+                if ev.get('event_number') == self.EVENT_CALV:
+                    dt = self._parse_date(ev.get('event_date', ''))
+                    if dt and dt <= cycle_end:
+                        last_calv_dt = dt
+            cum_count = 0
+            for ev in all_events:
+                if ev.get('event_number') not in [self.EVENT_AI, self.EVENT_ET]:
+                    continue
+                ev_dt = self._parse_date(ev.get('event_date', ''))
+                if ev_dt is None or ev_dt > cycle_end:
+                    continue
+                if last_calv_dt and ev_dt < last_calv_dt:
+                    continue
+                if self._parse_json_data(ev.get('json_data')).get('outcome') != 'R':
+                    cum_count += 1
+
+            details.append({
+                'auto_id': cow_auto_id,
+                'cow_id': cow.get('cow_id', ''),
+                'lact': cow.get('lact', ''),
+                'dim': dim,
+                'category': category,
+                'sire': sire,
+                'technician_code': str(technician_code).strip() if technician_code else '',
+                'ai_type_code': str(ai_type_code).strip() if ai_type_code else '',
+                'insemination_count': cum_count if bred_count > 0 else '',
+            })
+
+        _order = {'妊娠': 0, '流産': 1, '授精済(未確定)': 2, '空胎': 3, '未授精': 4}
+        details.sort(key=lambda x: (_order.get(x['category'], 9), x.get('cow_id') or ''))
+        return details
+
+    def analyze(self, period_start: Optional[str], period_end: Optional[str],
+                cow_filter: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[ReproResult]:
+        """
+        繁殖分析を実行（経産牛のみ: lact >= 1）
 
         Args:
             period_start: 期間開始（YYYY-MM-DD）
             period_end:   期間終了（YYYY-MM-DD）
+            cow_filter:   省略可。経産牛（lact>=1）に対し、True の牛だけを集計に含める。
 
         Returns:
             繁殖分析結果リスト（各サイクル分、古い順）
         """
         cycles = self.generate_cycles(period_start, period_end)
-        cows = self.db.get_all_cows()
+        # 経産牛のみ対象（未経産牛 lact=0 or None は除外）
+        cows = [c for c in self.db.get_all_cows() if (c.get('lact') or 0) >= 1]
+        if cow_filter:
+            cows = [c for c in cows if cow_filter(c)]
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
         results = []

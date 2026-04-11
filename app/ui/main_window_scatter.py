@@ -18,6 +18,7 @@ import threading
 import webbrowser
 import tempfile
 import html
+import sys
 
 try:
     from matplotlib.figure import Figure
@@ -43,6 +44,62 @@ logger = logging.getLogger(__name__)
 
 class ScatterPlotMixin:
     """Mixin: FALCON2 - 散布図描画 Mixin"""
+
+    def _copy_figure_image_to_clipboard(self, figure: Figure, dpi: int = 220):
+        """matplotlib Figure を画像としてクリップボードにコピー（PowerPoint貼り付け向け）。"""
+        try:
+            buf = io.BytesIO()
+            figure.savefig(
+                buf,
+                format="png",
+                dpi=dpi,
+                bbox_inches="tight",
+                facecolor=figure.get_facecolor(),
+                edgecolor="none",
+            )
+            buf.seek(0)
+            data_png = buf.getvalue()
+        except Exception as e:
+            logging.error(f"散布図画像の生成に失敗: {e}", exc_info=True)
+            messagebox.showerror("コピー失敗", f"散布図画像の生成に失敗しました。\n{e}")
+            return
+
+        if sys.platform != "win32":
+            messagebox.showinfo(
+                "画像コピー",
+                "この環境では画像のクリップボードコピーに未対応です。\n"
+                "「画像として保存」をご利用ください。"
+            )
+            return
+
+        try:
+            import win32clipboard  # type: ignore[reportMissingModuleSource]
+            from PIL import Image
+        except ImportError:
+            messagebox.showinfo(
+                "画像コピー",
+                "画像コピーには追加パッケージが必要です。\n\n"
+                "pip install pywin32 Pillow\n\n"
+                "インストール後、アプリを再起動して再度お試しください。"
+            )
+            return
+
+        try:
+            img = Image.open(io.BytesIO(data_png))
+            output = io.BytesIO()
+            img.convert("RGB").save(output, "BMP")
+            dib_data = output.getvalue()[14:]  # BMPヘッダー(14byte)を除去
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, dib_data)
+            win32clipboard.CloseClipboard()
+            messagebox.showinfo(
+                "コピー完了",
+                "散布図をクリップボードにコピーしました。\nPowerPointにそのまま貼り付けできます。"
+            )
+        except Exception as e:
+            logging.error(f"散布図のクリップボードコピーに失敗: {e}", exc_info=True)
+            messagebox.showerror("コピー失敗", f"クリップボードへのコピーに失敗しました。\n{e}")
     def _parse_scatter_plot_axes(self, query: str) -> Tuple[Optional[str], Optional[str]]:
         """
         ユーザー入力から散布図の縦軸・横軸をパース
@@ -486,9 +543,82 @@ class ScatterPlotMixin:
             
             csv_button = ttk.Button(button_frame, text="CSVコピー", command=copy_csv_to_clipboard)
             csv_button.pack(side=tk.LEFT, padx=5)
+
+            copy_img_button = ttk.Button(
+                button_frame,
+                text="画像コピー",
+                command=lambda: self._copy_figure_image_to_clipboard(fig)
+            )
+            copy_img_button.pack(side=tk.LEFT, padx=5)
             
             save_button = ttk.Button(button_frame, text="画像として保存", command=save_plot_image)
             save_button.pack(side=tk.LEFT, padx=5)
+
+            # 十字基準線（任意表示）
+            ref_frame = ttk.Frame(self.scatter_plot_frame)
+            ref_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+            show_ref_var = tk.BooleanVar(value=False)
+            x_ref_var = tk.StringVar()
+            y_ref_var = tk.StringVar()
+            ref_lines = {"v": None, "h": None}
+
+            def _clear_ref_lines():
+                for key in ("v", "h"):
+                    ln = ref_lines.get(key)
+                    if ln is not None:
+                        try:
+                            ln.remove()
+                        except Exception:
+                            pass
+                        ref_lines[key] = None
+
+            def _apply_ref_lines():
+                _clear_ref_lines()
+                if not show_ref_var.get():
+                    canvas.draw_idle()
+                    return
+
+                x_text = x_ref_var.get().strip()
+                y_text = y_ref_var.get().strip()
+                try:
+                    if x_text:
+                        x_val = float(x_text)
+                        ref_lines["v"] = ax.axvline(
+                            x=x_val, color="#c62828", linestyle="--", linewidth=1.2, alpha=0.95
+                        )
+                    if y_text:
+                        y_val = float(y_text)
+                        ref_lines["h"] = ax.axhline(
+                            y=y_val, color="#1565c0", linestyle="--", linewidth=1.2, alpha=0.95
+                        )
+                except ValueError:
+                    messagebox.showwarning("入力エラー", "基準線の値は数値で入力してください。")
+                    return
+
+                canvas.draw_idle()
+
+            ttk.Checkbutton(
+                ref_frame,
+                text="十字基準線を表示",
+                variable=show_ref_var,
+                command=_apply_ref_lines
+            ).pack(side=tk.LEFT, padx=(0, 10))
+            ttk.Label(ref_frame, text="X:").pack(side=tk.LEFT)
+            ttk.Entry(ref_frame, textvariable=x_ref_var, width=8).pack(side=tk.LEFT, padx=(2, 8))
+            ttk.Label(ref_frame, text="Y:").pack(side=tk.LEFT)
+            ttk.Entry(ref_frame, textvariable=y_ref_var, width=8).pack(side=tk.LEFT, padx=(2, 8))
+            ttk.Button(ref_frame, text="適用", command=_apply_ref_lines).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(
+                ref_frame,
+                text="解除",
+                command=lambda: (
+                    show_ref_var.set(False),
+                    x_ref_var.set(""),
+                    y_ref_var.set(""),
+                    _apply_ref_lines()
+                )
+            ).pack(side=tk.LEFT)
             
             # scatter_plot_frameをpack（チャット表示エリアの下に表示）
             self.scatter_plot_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
@@ -575,9 +705,82 @@ class ScatterPlotMixin:
             
             csv_button = ttk.Button(button_frame, text="CSVコピー", command=copy_csv_to_clipboard)
             csv_button.pack(side=tk.LEFT, padx=5)
+
+            copy_img_button = ttk.Button(
+                button_frame,
+                text="画像コピー",
+                command=lambda: self._copy_figure_image_to_clipboard(fig)
+            )
+            copy_img_button.pack(side=tk.LEFT, padx=5)
             
             save_button = ttk.Button(button_frame, text="画像として保存", command=save_plot_image)
             save_button.pack(side=tk.LEFT, padx=5)
+
+            # 十字基準線（任意表示）
+            ref_frame = ttk.Frame(self.scatter_plot_frame)
+            ref_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+            show_ref_var = tk.BooleanVar(value=False)
+            x_ref_var = tk.StringVar()
+            y_ref_var = tk.StringVar()
+            ref_lines = {"v": None, "h": None}
+
+            def _clear_ref_lines():
+                for key in ("v", "h"):
+                    ln = ref_lines.get(key)
+                    if ln is not None:
+                        try:
+                            ln.remove()
+                        except Exception:
+                            pass
+                        ref_lines[key] = None
+
+            def _apply_ref_lines():
+                _clear_ref_lines()
+                if not show_ref_var.get():
+                    canvas.draw_idle()
+                    return
+
+                x_text = x_ref_var.get().strip()
+                y_text = y_ref_var.get().strip()
+                try:
+                    if x_text:
+                        x_val = float(x_text)
+                        ref_lines["v"] = ax.axvline(
+                            x=x_val, color="#c62828", linestyle="--", linewidth=1.2, alpha=0.95
+                        )
+                    if y_text:
+                        y_val = float(y_text)
+                        ref_lines["h"] = ax.axhline(
+                            y=y_val, color="#1565c0", linestyle="--", linewidth=1.2, alpha=0.95
+                        )
+                except ValueError:
+                    messagebox.showwarning("入力エラー", "基準線の値は数値で入力してください。")
+                    return
+
+                canvas.draw_idle()
+
+            ttk.Checkbutton(
+                ref_frame,
+                text="十字基準線を表示",
+                variable=show_ref_var,
+                command=_apply_ref_lines
+            ).pack(side=tk.LEFT, padx=(0, 10))
+            ttk.Label(ref_frame, text="X:").pack(side=tk.LEFT)
+            ttk.Entry(ref_frame, textvariable=x_ref_var, width=8).pack(side=tk.LEFT, padx=(2, 8))
+            ttk.Label(ref_frame, text="Y:").pack(side=tk.LEFT)
+            ttk.Entry(ref_frame, textvariable=y_ref_var, width=8).pack(side=tk.LEFT, padx=(2, 8))
+            ttk.Button(ref_frame, text="適用", command=_apply_ref_lines).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(
+                ref_frame,
+                text="解除",
+                command=lambda: (
+                    show_ref_var.set(False),
+                    x_ref_var.set(""),
+                    y_ref_var.set(""),
+                    _apply_ref_lines()
+                )
+            ).pack(side=tk.LEFT)
             
             # scatter_plot_frameをpack（チャット表示エリアの下に表示）
             self.scatter_plot_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)

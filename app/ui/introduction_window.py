@@ -13,6 +13,7 @@ import logging
 
 from db.db_handler import DBHandler
 from modules.rule_engine import RuleEngine
+from modules.introduction_registration import register_introduction_cow
 from modules.app_settings_manager import get_app_settings_manager
 from settings_manager import SettingsManager
 from ui.date_picker_window import DatePickerWindow
@@ -185,6 +186,19 @@ class IntroductionWindow:
             row=1, column=1, sticky=tk.W, padx=(0, 5), pady=(0, 4)
         )
 
+        ttk.Label(date_frame, text="登録日（繁殖指標の起点）:").grid(row=2, column=0, sticky=tk.W, padx=(5, 8), pady=(6, 2))
+        reg_row = ttk.Frame(date_frame)
+        reg_row.grid(row=2, column=1, sticky=tk.W, padx=(0, 5), pady=(6, 2))
+        self.registration_date_entry = ttk.Entry(reg_row, width=_ENTRY_WIDTH, style="EventInput.TEntry")
+        self.registration_date_entry.pack(side=tk.LEFT, padx=(0, 4))
+        self.registration_date_entry.insert(0, self.introduction_date)
+        ttk.Button(reg_row, text="\U0001f4c5", width=3, command=lambda: self._open_date_picker(self.registration_date_entry)).pack(side=tk.LEFT)
+        ttk.Label(
+            date_frame,
+            text="空欄のときは導入日と同じ。妊娠率・受胎率の集計開始日として使います。",
+            style="EventInput.Hint.TLabel",
+        ).grid(row=3, column=1, sticky=tk.W, padx=(0, 5), pady=(0, 4))
+
         # 個体入力
         input_frame = ttk.LabelFrame(
             content_area, text="個体入力", padding=(12, 10), style="EventInput.TLabelframe"
@@ -262,6 +276,16 @@ class IntroductionWindow:
         self.pen_entry = ttk.Combobox(fields_frame, width=14, state="normal", style="EventInput.TCombobox")
         self.pen_entry.grid(row=_row, column=1, sticky=tk.W, padx=(0, 5), pady=2)
         self._load_pen_options()
+        _row += 1
+        ttk.Label(fields_frame, text="TAG（タグ）:").grid(row=_row, column=0, sticky=tk.W, padx=(5, 8), pady=2)
+        self.tag_entry = ttk.Entry(fields_frame, width=24, style="EventInput.TEntry")
+        self.tag_entry.grid(row=_row, column=1, sticky=tk.W, padx=(0, 5), pady=2)
+        _row += 1
+        ttk.Label(
+            fields_frame,
+            text="任意。農場独自の管理番号（一覧・個体カードのタグと同じ項目に保存）",
+            style="EventInput.Hint.TLabel",
+        ).grid(row=_row, column=1, sticky=tk.W, padx=(0, 5), pady=(0, 4))
 
         # ステータスラベル（登録後の確認メッセージ）
         self.status_label = tk.Label(
@@ -413,6 +437,7 @@ class IntroductionWindow:
             'pregnant_status': pregnant,
             'rc': rc,
             'pen': pen,
+            'tag': self.tag_entry.get().strip() or None,
         }
 
     def _save_cow(self):
@@ -446,8 +471,17 @@ class IntroductionWindow:
         if cow_data is None:
             return
 
+        reg_raw = self.registration_date_entry.get().strip() if hasattr(self, "registration_date_entry") else ""
+        if reg_raw:
+            registration_date = self._normalize_date(reg_raw)
+            if not registration_date:
+                messagebox.showerror("エラー", "登録日の形式が正しくありません（YYYY-MM-DD形式）。", parent=self.window)
+                return
+        else:
+            registration_date = introduction_date
+
         try:
-            self._do_save(cow_data, introduction_date)
+            self._do_save(cow_data, introduction_date, registration_date)
         except Exception as e:
             logging.error(f"個体登録エラー: {e}")
             messagebox.showerror("エラー", f"登録中にエラーが発生しました: {e}", parent=self.window)
@@ -463,101 +497,16 @@ class IntroductionWindow:
             self.status_label.config(text=f"✓ ID {registered_id} を登録しました")
             self._safe_focus(self.jpn10_entry)
 
-    def _do_save(self, cow_data: Dict[str, Any], introduction_date: str) -> None:
+    def _do_save(self, cow_data: Dict[str, Any], introduction_date: str, registration_date: str) -> None:
         """1頭分のデータをDBに保存する（内部共通処理）"""
-        # 既存個体確認
-        existing_cow = self.db.get_cow_by_id(cow_data['cow_id'])
-        if existing_cow and existing_cow.get('jpn10') == cow_data['jpn10']:
-            cow_auto_id = existing_cow.get('auto_id')
-        else:
-            new_cow_data = {
-                'cow_id': cow_data['cow_id'],
-                'jpn10': cow_data['jpn10'],
-                'brd': cow_data.get('breed'),
-                'bthd': cow_data.get('birth_date'),
-                'entr': introduction_date,
-                'lact': cow_data.get('lact', 0),
-                'clvd': cow_data.get('clvd'),
-                'rc': cow_data.get('rc', RuleEngine.RC_OPEN),
-                'pen': cow_data.get('pen'),
-                'frm': None
-            }
-            cow_auto_id = self.db.insert_cow(new_cow_data)
-
-        # 導入イベント
-        intro_event = {
-            "cow_auto_id": cow_auto_id,
-            "event_number": RuleEngine.EVENT_IN,
-            "event_date": introduction_date,
-            "json_data": {
-                "birth_date": cow_data.get('birth_date'),
-                "lactation": cow_data.get('lact', 0),
-                "calving_date": cow_data.get('clvd'),
-                "last_ai_date": cow_data.get('last_ai_date'),
-                "reproduction_code": cow_data.get('rc'),
-                "pen": cow_data.get('pen'),
-                "source": "manual_external"
-            },
-            "note": "外部からの導入"
-        }
-        event_id = self.db.insert_event(intro_event)
-        self.rule_engine.on_event_added(event_id)
-
-        # 分娩イベント（baseline）
-        clvd = cow_data.get('clvd')
-        if clvd:
-            calv_event_id = self.db.insert_event({
-                "cow_auto_id": cow_auto_id,
-                "event_number": RuleEngine.EVENT_CALV,
-                "event_date": clvd,
-                "json_data": {"baseline_calving": True},
-                "note": "導入時の分娩（baseline）"
-            })
-            self.rule_engine.on_event_added(calv_event_id)
-
-        # 最終授精イベント
-        last_ai_date = cow_data.get('last_ai_date')
-        if last_ai_date:
-            ai_json: Dict[str, Any] = {"ai_count": cow_data.get('ai_count', 0)}
-            if cow_data.get('last_ai_sire'):
-                ai_json["sire"] = cow_data['last_ai_sire']
-            ai_event_id = self.db.insert_event({
-                "cow_auto_id": cow_auto_id,
-                "event_number": RuleEngine.EVENT_AI,
-                "event_date": last_ai_date,
-                "json_data": ai_json,
-                "note": "導入時の最終授精"
-            })
-            self.rule_engine.on_event_added(ai_event_id)
-
-        pregnant_status = cow_data.get('pregnant_status', '')
-
-        # 妊娠中 or 乾乳中：妊娠プラスイベント
-        if pregnant_status in ("pregnant", "dry"):
-            preg_event_id = self.db.insert_event({
-                "cow_auto_id": cow_auto_id,
-                "event_number": RuleEngine.EVENT_PDP2,
-                "event_date": introduction_date,
-                "json_data": {"twin": False},
-                "note": "導入時の妊娠確認"
-            })
-            self.rule_engine.on_event_added(preg_event_id)
-
-        # 乾乳中：乾乳イベント
-        if pregnant_status == "dry":
-            dry_event_id = self.db.insert_event({
-                "cow_auto_id": cow_auto_id,
-                "event_number": RuleEngine.EVENT_DRY,
-                "event_date": introduction_date,
-                "json_data": {},
-                "note": "導入時の乾乳"
-            })
-            self.rule_engine.on_event_added(dry_event_id)
-
-        # 授精回数をitem_valueに保存
-        ai_count = cow_data.get('ai_count', 0)
-        if ai_count > 0 and cow_auto_id is not None:
-            self.db.set_item_value(int(cow_auto_id), "BRED", ai_count)
+        register_introduction_cow(
+            self.db,
+            self.rule_engine,
+            cow_data,
+            introduction_date,
+            registration_date,
+            intro_note="外部からの導入",
+        )
 
     def _clear_form(self):
         """個体入力フォームを全クリア"""
@@ -574,6 +523,10 @@ class IntroductionWindow:
         self.ai_count_entry.delete(0, tk.END)
         self.pregnant_var.set("")
         self.pen_entry.delete(0, tk.END)
+        self.tag_entry.delete(0, tk.END)
+        if hasattr(self, "registration_date_entry"):
+            self.registration_date_entry.delete(0, tk.END)
+            self.registration_date_entry.insert(0, self.date_entry.get().strip() or self.introduction_date)
 
     def show(self):
         """ウィンドウを表示"""

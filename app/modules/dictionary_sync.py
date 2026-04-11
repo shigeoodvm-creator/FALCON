@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
-from constants import FARMS_ROOT
+from constants import FARMS_ROOT, CONFIG_DEFAULT_DIR
 
 # ロガーを設定
 logger = logging.getLogger(__name__)
@@ -18,28 +18,12 @@ logger = logging.getLogger(__name__)
 
 class DictionarySync:
     """辞書同期処理クラス"""
-    
-    def __init__(self, falcon_root: Path):
-        """
-        初期化
-        
-        Args:
-            falcon_root: FALCONフォルダのルートパス（例: C:\\FALCON）
-        """
-        self.falcon_root = Path(falcon_root)
-        self.config_default_dir = self.falcon_root / "config_default"
-        self.docs_dir = self.falcon_root / "docs"
-        
-        # マスター辞書のパス（docsを優先、なければconfig_default）
-        # event_dictionary.json
-        docs_event_dict = self.docs_dir / "event_dictionary.json"
-        config_event_dict = self.config_default_dir / "event_dictionary.json"
-        self.default_event_dict_path = docs_event_dict if docs_event_dict.exists() else config_event_dict
-        
-        # item_dictionary.json（docsを優先、なければconfig_default）
-        docs_item_dict = self.docs_dir / "item_dictionary.json"
-        config_item_dict = self.config_default_dir / "item_dictionary.json"
-        self.default_item_dict_path = docs_item_dict if docs_item_dict.exists() else config_item_dict
+
+    def __init__(self):
+        """初期化（辞書パスは constants.CONFIG_DEFAULT_DIR から取得）"""
+        self.config_default_dir = CONFIG_DEFAULT_DIR
+        self.default_event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
+        self.default_item_dict_path  = CONFIG_DEFAULT_DIR / "item_dictionary.json"
 
     def delete_farm_dictionary_files(self, farms_root: Path = None) -> Dict[str, Any]:
         """

@@ -49,22 +49,22 @@ class QueryExecutor:
         if self.item_dictionary_path:
             item_path = Path(self.item_dictionary_path)
         else:
-            # デフォルトパス（農場フォルダ内を想定、実際の使用時は適切なパスを指定）
-            item_path = Path("config_default/item_dictionary.json")
-        
+            from constants import CONFIG_DEFAULT_DIR
+            item_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
+
         if item_path.exists():
             try:
                 with open(item_path, 'r', encoding='utf-8') as f:
                     self.item_dictionary = json.load(f)
             except Exception as e:
                 logging.warning(f"item_dictionary.json読み込みエラー: {e}")
-        
+
         # event_dictionary.json
         if self.event_dictionary_path:
             event_path = Path(self.event_dictionary_path)
         else:
-            # デフォルトパス
-            event_path = Path("config_default/event_dictionary.json")
+            from constants import CONFIG_DEFAULT_DIR
+            event_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         
         if event_path.exists():
             try:

@@ -592,13 +592,20 @@ class CowListWindow:
         # 既に同じ個体カードが開いている場合は前面に出す
         if cow_auto_id in self.open_cow_windows:
             window = self.open_cow_windows[cow_auto_id]
-            window.window.lift()
-            window.window.focus_set()
-            return
+            try:
+                if window.window.winfo_exists():
+                    window.load_cow(cow_auto_id)
+                    window.show()
+                    window.window.focus_set()
+                    return
+            except Exception:
+                pass
+            # 参照はあるが既に破棄されている場合は掃除して作り直す
+            self.open_cow_windows.pop(cow_auto_id, None)
         
         # 新しい個体カードウィンドウを作成（CowCardWindowを使用）
-        # parentはルートウィンドウを取得（画面の高さを正しく取得するため）
-        root_window = self.window.winfo_toplevel()
+        # parentはアプリのrootに統一（個体一覧ウィンドウのライフサイクルから分離）
+        root_window = self.window._root()
         cow_card_window = CowCardWindow(
             parent=root_window,
             db_handler=self.db,
@@ -612,13 +619,10 @@ class CowListWindow:
         # ウィンドウを管理
         self.open_cow_windows[cow_auto_id] = cow_card_window
         
-        # ウィンドウが閉じられたときに管理から削除
-        def on_window_close():
-            if cow_auto_id in self.open_cow_windows:
-                del self.open_cow_windows[cow_auto_id]
-            cow_card_window.window.destroy()
-        
-        cow_card_window.window.protocol("WM_DELETE_WINDOW", on_window_close)
+        # 破棄時に管理辞書から削除（CowCardWindow の既存 close 処理を上書きしない）
+        def _cleanup(_event=None, aid=cow_auto_id):
+            self.open_cow_windows.pop(aid, None)
+        cow_card_window.window.bind("<Destroy>", _cleanup, add="+")
         
         # ウィンドウを表示
         cow_card_window.show()

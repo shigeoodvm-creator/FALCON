@@ -128,9 +128,12 @@ def find_overdue_calving_cows(db, formula_engine) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def show_alert_window(root: tk.Tk, farm_path: Path, db,
-                      formula_engine=None, rule_engine=None) -> None:
-    """分娩過期牛アラートウィンドウを表示（月1回）"""
-    if not should_run_this_month(farm_path):
+                      formula_engine=None, rule_engine=None,
+                      force: bool = False) -> None:
+    """分娩過期牛アラートウィンドウを表示。
+    force=True の場合は月次制限をバイパスし、チェック日も更新しない。
+    """
+    if not force and not should_run_this_month(farm_path):
         return
 
     if formula_engine is None:
@@ -138,15 +141,25 @@ def show_alert_window(root: tk.Tk, farm_path: Path, db,
         return
 
     cows = find_overdue_calving_cows(db, formula_engine)
-    record_checked(farm_path)
+
+    if not force:
+        record_checked(farm_path)
 
     if not cows:
-        logger.info("分娩過期牛なし（%d日未満）", _THRESHOLD_DAYS)
+        if force:
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "分娩超過チェック",
+                f"分娩予定日から {_THRESHOLD_DAYS} 日以上経過した牛はいません。",
+                parent=root
+            )
+        else:
+            logger.info("分娩過期牛なし（%d日未満）", _THRESHOLD_DAYS)
         return
 
     # ---- ウィンドウ ----
     win = tk.Toplevel(root)
-    win.title("⚠ 分娩過期牛の確認（月次チェック）")
+    win.title("分娩超過牛の確認" if force else "⚠ 分娩超過牛の確認（月次チェック）")
     win.resizable(True, True)
     win.grab_set()
 
@@ -268,9 +281,8 @@ def show_alert_window(root: tk.Tk, farm_path: Path, db,
             return
         iid = str(cow["auto_id"])
         try:
-            falcon_root = Path(__file__).parent.parent.parent
-            config_default = falcon_root / "config_default"
-            event_dict_path = config_default / "event_dictionary.json"
+            from constants import CONFIG_DEFAULT_DIR
+            event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
 
             def _on_calv_saved(_cow_auto_id: int):
                 if win.winfo_exists():
@@ -311,10 +323,9 @@ def show_alert_window(root: tk.Tk, farm_path: Path, db,
         if not cow or not cow.get("auto_id"):
             return
         try:
-            falcon_root = Path(__file__).parent.parent.parent
-            config_default = falcon_root / "config_default"
-            event_dict_path = config_default / "event_dictionary.json"
-            item_dict_path  = config_default / "item_dictionary.json"
+            from constants import CONFIG_DEFAULT_DIR
+            event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
+            item_dict_path  = CONFIG_DEFAULT_DIR / "item_dictionary.json"
             from ui.cow_card_window import CowCardWindow
             cw = CowCardWindow(
                 parent=root,
@@ -395,8 +406,9 @@ def show_alert_window(root: tk.Tk, farm_path: Path, db,
 
     tk.Label(bottom, textvariable=status_var,
              font=("Meiryo UI", 8), foreground="#1B5E20", anchor=tk.W).pack(side=tk.LEFT)
-    tk.Label(bottom, text="※ このチェックは月に1回表示されます",
-             font=("Meiryo UI", 8), foreground="gray").pack(side=tk.LEFT, padx=(8, 0))
+    if not force:
+        tk.Label(bottom, text="※ このチェックは月に1回自動表示されます",
+                 font=("Meiryo UI", 8), foreground="gray").pack(side=tk.LEFT, padx=(8, 0))
 
     close_btn = ttk.Button(bottom, text="閉じる", command=win.destroy)
     close_btn.pack(side=tk.RIGHT)

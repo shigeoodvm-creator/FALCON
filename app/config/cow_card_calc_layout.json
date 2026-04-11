@@ -1,0 +1,17 @@
+{
+  "tab_orders": {
+    "USER": [
+      "DIM",
+      "CINT",
+      "DAI",
+      "PCI",
+      "DUE",
+      null
+    ],
+    "REPRODUCTION": [],
+    "DHI": [],
+    "GENOMIC": [],
+    "HEALTH": [],
+    "OTHERS": []
+  }
+}

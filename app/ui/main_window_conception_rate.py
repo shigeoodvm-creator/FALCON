@@ -43,6 +43,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 集計グラフ（MainWindow._display_aggregate_graph）と受胎率棒グラフで統一する Matplotlib スタイル
+FALCON_BAR_CHART_KW = dict(color="steelblue", alpha=0.7, edgecolor="black", linewidth=0.5)
+FALCON_BAR_CHART_GRID_KW = dict(linestyle="--", alpha=0.3, axis="y")
+FALCON_BAR_CHART_TITLE_KW = dict(fontsize=12, fontweight="bold", pad=15)
+FALCON_BAR_CHART_AXIS_LABEL_FS = 11
+FALCON_BAR_CHART_VALUE_FS = 9
+
+
 class ConceptionRateMixin:
     """Mixin: FALCON2 - 受胎率計算・表示 Mixin"""
 
@@ -70,7 +78,7 @@ class ConceptionRateMixin:
                 if e and not self.end_date_placeholder_shown:
                     end_date = e
 
-            # 条件取得（現在は表示用のみ）
+            # 条件取得（受胎率と同じ評価で経産牛リストを絞り込み）
             condition_text = ""
             if hasattr(self, 'pregnancy_rate_condition_entry') and self.pregnancy_rate_condition_entry.winfo_exists():
                 if not self.pregnancy_rate_condition_placeholder_shown:
@@ -89,9 +97,15 @@ class ConceptionRateMixin:
                         formula_engine=self.formula_engine,
                         vwp=vwp
                     )
-                    results = analyzer.analyze(start_date, end_date)
-                    self.root.after(0, lambda: self._display_pregnancy_rate_result(
-                        results, vwp, period_text, condition_text
+                    cow_filter = None
+                    if condition_text:
+                        def _cf(cow):
+                            return self._evaluate_cow_condition_for_conception_rate(
+                                cow, condition_text, self.db)
+                        cow_filter = _cf
+                    results = analyzer.analyze(start_date, end_date, cow_filter=cow_filter)
+                    self.root.after(0, lambda res=results, cf=cow_filter: self._display_pregnancy_rate_result(
+                        res, vwp, period_text, condition_text, cf
                     ))
                 except Exception as ex:
                     err = str(ex)
@@ -107,14 +121,16 @@ class ConceptionRateMixin:
             logging.error(f"妊娠率コマンド実行エラー: {e}", exc_info=True)
             self.add_message(role="system", text=f"妊娠率の計算中にエラーが発生しました: {e}")
 
-    def _display_pregnancy_rate_result(self, results, vwp: int, period_text: str, condition_text: str):
+    def _display_pregnancy_rate_result(self, results, vwp: int, period_text: str, condition_text: str,
+                                       cow_filter=None):
         """妊娠率結果を表とグラフで表示"""
         try:
+            self._pr_cow_filter = cow_filter
             if not results:
                 self.add_message(role="system", text="該当するデータがありません")
                 return
 
-            headers = ["開始日", "終了日", "繁殖対象", "授精", "授精率%", "妊娠対象", "妊娠", "妊娠率%", "損耗"]
+            headers = ["開始日", "終了日", "繁殖対象", "授精", "授精率%", "妊娠対象", "妊娠", "受胎率%", "妊娠率%", "損耗"]
             rows = []
 
             total_br_el = 0
@@ -134,6 +150,7 @@ class ConceptionRateMixin:
             for r in results:
                 hdr_str = f"{int(r.hdr)}%" if r.br_el > 0 else "-"
                 pr_str = f"{int(r.pr)}%" if r.preg_eligible > 0 else "-"
+                cr_str = f"{round(r.preg / r.bred * 100)}%" if r.bred > 0 and r.preg_eligible > 0 else "-"
                 rows.append([
                     fmt_date(r.start_date),
                     fmt_date(r.end_date),
@@ -142,6 +159,7 @@ class ConceptionRateMixin:
                     hdr_str,
                     str(r.preg_eligible) if r.preg_eligible > 0 else "-",
                     str(r.preg) if r.preg_eligible > 0 else "-",
+                    cr_str,
                     pr_str,
                     str(r.loss) if r.preg_eligible > 0 else "-",
                 ])
@@ -154,6 +172,7 @@ class ConceptionRateMixin:
             # 合計行
             total_hdr_str = f"{round(total_bred / total_br_el * 100)}%" if total_br_el > 0 else "-"
             total_pr_str = f"{round(total_preg / total_preg_eligible * 100)}%" if total_preg_eligible > 0 else "-"
+            total_cr_str = f"{round(total_preg / total_bred * 100)}%" if total_bred > 0 and total_preg_eligible > 0 else "-"
             rows.append([
                 "【合計】",
                 "",
@@ -162,6 +181,7 @@ class ConceptionRateMixin:
                 total_hdr_str,
                 str(total_preg_eligible) if total_preg_eligible > 0 else "-",
                 str(total_preg) if total_preg_eligible > 0 else "-",
+                total_cr_str,
                 total_pr_str,
                 str(total_loss) if total_preg_eligible > 0 else "-",
             ])
@@ -170,6 +190,21 @@ class ConceptionRateMixin:
             if condition_text:
                 title = f"{title}：{condition_text}"
             self._display_list_result_in_table(headers, rows, title, period=period_text)
+
+            # ヘッダー着色・合計行太字
+            self._apply_pr_table_styling(headers)
+
+            # ヒートマップ着色（妊娠率%列: ≥20%→薄緑、未満→無色）
+            self._apply_pregnancy_rate_heatmap()
+
+            # ドリルダウン用: 元データとVWPを保存し、シングルクリックをバインド
+            self._pr_cycle_results = list(results)
+            self._pr_vwp = vwp
+            if hasattr(self, 'result_treeview') and self.result_treeview.winfo_exists():
+                self.result_treeview.unbind("<Double-Button-1>")
+                self.result_treeview.unbind("<Button-1>")
+                self.result_treeview.unbind("<ButtonRelease-1>")
+                self.result_treeview.bind("<ButtonRelease-1>", self._on_pregnancy_rate_row_click)
 
             # グラフ表示
             if MATPLOTLIB_AVAILABLE:
@@ -263,7 +298,7 @@ class ConceptionRateMixin:
             # matplotlib キャンバス
             from matplotlib.figure import Figure
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-            figure = Figure(figsize=(11, 4.8), dpi=95)
+            figure = Figure(figsize=(11, 4.8), dpi=100)
             canvas = FigureCanvasTkAgg(figure, graph_win)
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=(6, 2))
 
@@ -300,52 +335,59 @@ class ConceptionRateMixin:
             # ---- 描画関数 ----
             def draw(pr_target: float = 0, hdr_target: float = 0):
                 figure.clear()
+                figure.patch.set_facecolor('white')
                 ax = figure.add_subplot(111)
+                ax.set_facecolor('white')
                 hdr_above = [max(0.0, h - p) for h, p in zip(hdr_vals, pr_vals)]
 
                 bar_w = 0.6
-                ax.bar(x, pr_vals, width=bar_w, color='#1565c0', label='妊娠率', zorder=3)
+                ax.bar(x, pr_vals, width=bar_w, color='#1565c0', label='妊娠率')
                 ax.bar(x, hdr_above, width=bar_w, bottom=pr_vals,
-                       color='#90caf9', label='授精率（妊娠率との差）', zorder=3)
+                       color='#90caf9', label='授精率（妊娠率との差）')
 
                 # 妊娠率 95%信頼区間 エラーバー
                 ax.errorbar(x, pr_vals,
                             yerr=[_yerr_lo, _yerr_hi],
-                            fmt='none', color='#0d47a1', linewidth=1.4,
-                            capsize=0, zorder=5, label='妊娠率 95%信頼区間')
+                            fmt='none', color='#0d47a1', linewidth=1.2,
+                            capsize=0, label='妊娠率 95%信頼区間')
 
                 for i, (p, h) in enumerate(zip(pr_vals, hdr_vals)):
                     if h > 0:
-                        ax.text(i, h + 0.6, f"{int(h)}%",
-                                ha='center', va='bottom', fontsize=7, color='#0d47a1')
+                        ax.text(i, h + 0.5, f"{int(h)}%",
+                                ha='center', va='bottom', fontsize=7, color='#455a64')
                     if p > 0:
                         ax.text(i, p / 2, f"{int(p)}%",
                                 ha='center', va='center', fontsize=7,
                                 color='white', fontweight='bold')
 
                 if pr_target > 0:
-                    ax.axhline(pr_target, color='#0d47a1', linestyle='--', linewidth=2,
-                               label=f'妊娠率目標 {int(pr_target)}%', zorder=5)
-                    ax.text(len(x) - 0.5, pr_target + 0.6,
-                            f"目標 {int(pr_target)}%", color='#0d47a1',
-                            fontsize=8, va='bottom', ha='right', zorder=6)
+                    ax.axhline(pr_target, color='#1565c0', linestyle='--', linewidth=1.5,
+                               label=f'妊娠率目標 {int(pr_target)}%')
+                    ax.text(len(x) - 0.5, pr_target + 0.5,
+                            f"目標 {int(pr_target)}%", color='#1565c0',
+                            fontsize=8, va='bottom', ha='right')
                 if hdr_target > 0:
-                    ax.axhline(hdr_target, color='#e65100', linestyle='--', linewidth=2,
-                               label=f'授精率目標 {int(hdr_target)}%', zorder=5)
-                    ax.text(len(x) - 0.5, hdr_target + 0.6,
+                    ax.axhline(hdr_target, color='#e65100', linestyle='--', linewidth=1.5,
+                               label=f'授精率目標 {int(hdr_target)}%')
+                    ax.text(len(x) - 0.5, hdr_target + 0.5,
                             f"目標 {int(hdr_target)}%", color='#e65100',
-                            fontsize=8, va='bottom', ha='right', zorder=6)
+                            fontsize=8, va='bottom', ha='right')
 
                 ax.set_xticks(x)
                 ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
-                ax.set_xlabel("サイクル開始日", fontsize=10)
-                ax.set_ylabel("%", fontsize=10)
-                ax.set_title(full_title, fontsize=10, fontweight='bold', pad=8)
+                ax.set_xlabel("サイクル開始日", fontsize=9)
+                ax.set_ylabel("%", fontsize=9)
+                ax.set_title(full_title, fontsize=10, fontweight='bold', pad=10)
                 y_max_data = max((max(hdr_vals) if hdr_vals else 0), pr_target, hdr_target)
                 ax.set_ylim(0, max(100, y_max_data * 1.15))
-                ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+                ax.grid(True, color='#e0e0e0', linewidth=0.8, axis='y')
                 ax.set_axisbelow(True)
-                ax.legend(loc='upper left', fontsize=8)
+                ax.spines['top'].set_color('#cccccc')
+                ax.spines['right'].set_color('#cccccc')
+                ax.spines['left'].set_color('#cccccc')
+                ax.spines['bottom'].set_color('#cccccc')
+                ax.tick_params(colors='#555555')
+                ax.legend(loc='upper left', fontsize=8, framealpha=0.7, edgecolor='none')
 
                 try:
                     figure.tight_layout()
@@ -383,9 +425,9 @@ class ConceptionRateMixin:
                 return
 
             rate_type = self.conception_rate_type_var.get().strip()
+            # 未選択は「全体」（期間内合計）として実行（タイプ切替直後もそのまま実行可）
             if not rate_type:
-                self.add_message(role="system", text="受胎率の種類を選択してください")
-                return
+                rate_type = "全体"
 
             # 期間を取得
             start_date = None
@@ -762,9 +804,15 @@ class ConceptionRateMixin:
                 precomputed_insemination_counts = self.rule_engine.calculate_insemination_counts(cow_auto_id)
                 
                 # 各AI/ETイベントを処理
+                entr_cutoff = (cow.get('entr') or '').strip()[:10]
                 for ai_event in events:
                     event_date = ai_event.get('event_date')
                     event_number = ai_event.get('event_number')
+                    # 登録日（entr）より前の授精は受胎率の母数に含めない
+                    if entr_cutoff and event_date:
+                        ed = (str(event_date)[:10])
+                        if ed < entr_cutoff:
+                            continue
                     json_data_str = ai_event.get('json_data') or '{}'
                     try:
                         json_data = json.loads(json_data_str) if isinstance(json_data_str, str) else json_data_str
@@ -982,6 +1030,9 @@ class ConceptionRateMixin:
                 json_data = json.loads(json_data_str) if isinstance(json_data_str, str) else json_data_str
             except:
                 json_data = {}
+            
+            if rate_type == "全体":
+                return "全体"
             
             if rate_type == "月":
                 # 月：YYYY-MM形式
@@ -1387,15 +1438,22 @@ class ConceptionRateMixin:
             # 表を表示（条件をタイトルに追加）
             condition_text = result.get('condition_text', '')
             cow_type_label = result.get('cow_type', '経産')
-            title = f"受胎率（{cow_type_label}）（{rate_type}別）"
+            if rate_type == "全体":
+                title = f"受胎率（{cow_type_label}）（全体）"
+            else:
+                title = f"受胎率（{cow_type_label}）（{rate_type}別）"
             if condition_text:
                 title = f"{title}：{condition_text}"
             self._display_list_result_in_table(headers, rows, title, period=period)
-            
-            # 受胎率結果テーブルにダブルクリックイベントをバインド
+
+            # ヒートマップ着色を適用
+            self._apply_conception_rate_heatmap()
+
+            # 受胎率結果テーブルにシングルクリックドリルダウンをバインド
             self.result_treeview.unbind("<Double-Button-1>")
-            self.result_treeview.bind("<Double-Button-1>", self._on_conception_rate_cell_double_click)
-            
+            self.result_treeview.unbind("<ButtonRelease-1>")
+            self.result_treeview.bind("<ButtonRelease-1>", self._on_conception_rate_row_click)
+
             # グラフタブでも受胎率の結果を表示できるようにする
             self._display_conception_rate_graph(result, rate_type, period)
             
@@ -1483,27 +1541,32 @@ class ConceptionRateMixin:
             
             if not classifications:
                 return
-            
-            # グラフ表示用のデータ形式を作成（集計と同じ形式）
+
+            cow_type_label = result.get("cow_type", "経産")
+            if rate_type == "全体":
+                graph_title = f"受胎率（{cow_type_label}）（全体）"
+            else:
+                graph_title = f"受胎率（{cow_type_label}）（{rate_type}別）"
+
+            # グラフ表示用のデータ形式を作成（集計グラフと同じ見た目用に total で N= を付与）
             graph_data = {
-                'type': 'conception_rate',
-                'x_axis': classifications,
-                'y_axis': rates,
-                'title': f"受胎率（経産）（{rate_type}別）",
-                'x_label': rate_type,
-                'y_label': '受胎率（%）',
-                'additional_data': {
-                    'conceived': conceived_counts,
-                    'not_conceived': not_conceived_counts,
-                    'other': other_counts,
-                    'total': total_counts
+                "type": "conception_rate",
+                "x_axis": classifications,
+                "y_axis": rates,
+                "title": graph_title,
+                "x_label": rate_type,
+                "y_label": "受胎率（%）",
+                "additional_data": {
+                    "conceived": conceived_counts,
+                    "not_conceived": not_conceived_counts,
+                    "other": other_counts,
+                    "total": total_counts,
                 },
-                'period': period
+                "period": period,
             }
-            
-            # グラフ表示用のデータを保存
+
             self.current_graph_data = graph_data
-            self.current_graph_command = f"受胎率（経産）（{rate_type}別）"
+            self.current_graph_command = graph_title
 
             # グラフをウィンドウで表示
             if MATPLOTLIB_AVAILABLE:
@@ -1573,33 +1636,59 @@ class ConceptionRateMixin:
             if period:
                 cmd_text += f" | 対象期間：{period}"
             tk.Label(
-                graph_win, text=cmd_text,
-                font=(getattr(self, '_main_font_family', 'Meiryo UI'), 9),
-                anchor=tk.W
-            ).pack(fill=tk.X, padx=10, pady=(6, 0))
+                graph_win,
+                text=cmd_text,
+                font=(getattr(self, "_main_font_family", "Meiryo UI"), 9),
+                anchor=tk.W,
+            ).pack(fill=tk.X, padx=10, pady=5)
 
-            # matplotlib Figure
+            # matplotlib Figure（集計グラフ _display_aggregate_graph と同一スタイル）
             from matplotlib.figure import Figure
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
             figure = Figure(figsize=(10, 6), dpi=100)
             canvas = FigureCanvasTkAgg(figure, graph_win)
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
             ax = figure.add_subplot(111)
-            bars = ax.bar(range(len(x_labels)), y_values,
-                          color='steelblue', alpha=0.7, edgecolor='black', linewidth=0.5)
+            figure.patch.set_facecolor("white")
+            ax.set_facecolor("white")
+
+            bars = ax.bar(range(len(x_labels)), y_values, **FALCON_BAR_CHART_KW)
             ax.set_xticks(range(len(x_labels)))
-            ax.set_xticklabels(x_labels, rotation=45, ha='right')
+
+            add_data = graph_data.get("additional_data") or {}
+            n_list = add_data.get("total") or []
+            if len(n_list) == len(x_labels) and n_list:
+                x_labels_display = [f"{lab}\n(N={n})" for lab, n in zip(x_labels, n_list)]
+            else:
+                x_labels_display = list(x_labels)
+
+            ax.set_xticklabels(x_labels_display, rotation=0, ha="center")
 
             for bar, value in zip(bars, y_values):
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2., height,
-                        f'{value:.1f}%', ha='center', va='bottom', fontsize=9)
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height + 0.5,
+                    f"{value:.1f}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=FALCON_BAR_CHART_VALUE_FS,
+                )
 
-            ax.set_title(full_title, fontsize=12, fontweight='bold', pad=15)
-            ax.set_xlabel(x_label, fontsize=11, fontweight='bold')
-            ax.set_ylabel(y_label, fontsize=11, fontweight='bold')
-            ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+            ax.set_title(full_title, **FALCON_BAR_CHART_TITLE_KW)
+            ax.set_xlabel(
+                x_label,
+                fontsize=FALCON_BAR_CHART_AXIS_LABEL_FS,
+                fontweight="bold",
+            )
+            ax.set_ylabel(
+                y_label,
+                fontsize=FALCON_BAR_CHART_AXIS_LABEL_FS,
+                fontweight="bold",
+            )
+            ax.grid(True, **FALCON_BAR_CHART_GRID_KW)
             ax.set_axisbelow(True)
             y_max = max(y_values) if y_values else 100
             ax.set_ylim(0, max(100, y_max * 1.2))
@@ -1623,6 +1712,84 @@ class ConceptionRateMixin:
         except Exception as e:
             logging.error(f"[グラフ] 受胎率グラフ表示エラー: {e}", exc_info=True)
     
+    def _apply_conception_rate_heatmap(self):
+        """受胎率テーブルの行をパーセンタイルでヒートマップ着色する
+        上位25%: 薄緑 / 下位25%: 薄赤 / 中間50%: 無色
+        """
+        try:
+            if not hasattr(self, 'result_treeview') or not self.result_treeview.winfo_exists():
+                return
+            tree = self.result_treeview
+
+            tree.tag_configure('cr_high',  background='#e8f5e9')  # 上位25%: 薄緑
+            tree.tag_configure('cr_low',   background='#fce4ec')  # 下位25%: 薄赤
+            tree.tag_configure('cr_total', background='#f0f0f0',
+                               font=(self._main_font_family, 9, 'bold'))  # 合計行
+
+            # 合計行を除いた受胎率の値を収集
+            children = tree.get_children()
+            rates: list[tuple] = []  # (item, rate)
+            for item in children:
+                values = tree.item(item, 'values')
+                if not values:
+                    continue
+                if str(values[0]) == '合計':
+                    tree.item(item, tags=('cr_total',))
+                    continue
+                rate_str = str(values[1]).replace('%', '').strip()
+                try:
+                    rates.append((item, float(rate_str)))
+                except (ValueError, TypeError):
+                    continue
+
+            if not rates:
+                return
+
+            # 25・75パーセンタイルを計算
+            sorted_rates = sorted(r for _, r in rates)
+            n = len(sorted_rates)
+            p25 = sorted_rates[max(0, int(n * 0.25) - 1)]
+            p75 = sorted_rates[min(n - 1, int(n * 0.75))]
+
+            for item, rate in rates:
+                if rate >= p75:
+                    tree.item(item, tags=('cr_high',))
+                elif rate <= p25:
+                    tree.item(item, tags=('cr_low',))
+                # 中間: タグなし（無色）
+
+        except Exception as e:
+            logging.error(f"受胎率ヒートマップ適用エラー: {e}", exc_info=True)
+
+    def _on_conception_rate_row_click(self, event):
+        """受胎率結果テーブルの行をシングルクリックした時のドリルダウン処理"""
+        try:
+            tree = self.result_treeview
+            # クリック位置の行を特定
+            item = tree.identify_row(event.y)
+            if not item:
+                return
+
+            values = tree.item(item, 'values')
+            if not values:
+                return
+
+            classification = values[0] if len(values) > 0 else None
+            if not classification or classification == '合計':
+                return
+
+            if not hasattr(self, 'conception_rate_events_by_classification'):
+                return
+
+            events_data = self.conception_rate_events_by_classification.get(classification, [])
+            if not events_data:
+                return
+
+            self._show_conception_rate_events_window(classification, events_data)
+
+        except Exception as e:
+            logging.error(f"受胎率行クリックエラー: {e}", exc_info=True)
+
     def _on_conception_rate_cell_double_click(self, event):
         """受胎率結果テーブルのセルをダブルクリックした時の処理"""
         try:
@@ -1717,6 +1884,12 @@ class ConceptionRateMixin:
             for col in columns:
                 treeview.heading(col, text=col)
                 treeview.column(col, width=100, anchor=tk.W)
+
+            # 結果による色分け
+            treeview.tag_configure('result_P', background='#e8f5e9', foreground='#1b5e20')   # 妊娠：緑
+            treeview.tag_configure('result_O', background='#fce4ec', foreground='#880e4f')   # 空胎：赤
+            treeview.tag_configure('result_A', background='#fff3e0', foreground='#e65100')   # 流産：橙
+            treeview.tag_configure('result_pending', background='#e3f2fd', foreground='#0d47a1')  # 連注/未鑑定：青
             
             # 農場設定を読み込む
             settings = SettingsManager(self.farm_path)
@@ -1738,7 +1911,14 @@ class ConceptionRateMixin:
             if not insemination_type_codes:
                 insemination_type_codes = settings.get('insemination_type_codes', {})
             
-            # イベントデータを表示
+            # item_id → auto_id マップ（ダブルクリック時に使用。ソートのたびに再構築）
+            auto_id_map: Dict[str, Any] = {}
+
+            # 行レコード（ソート用）を構築
+            row_records: List[Dict[str, Any]] = []
+            _result_order_map = {'妊娠': 0, '空胎': 1, '流産': 2, '連注': 3, '未鑑定': 4}
+
+            # イベントデータを走査して行レコードを作成
             for event_data in events_data:
                 ai_event = event_data['ai_event']
                 cow = event_data['cow']
@@ -1748,9 +1928,16 @@ class ConceptionRateMixin:
                 
                 # 日付
                 event_date = ai_event.get('event_date', '')
+                event_dt_sort = None
+                if event_date:
+                    try:
+                        event_dt_sort = datetime.strptime(event_date[:10], '%Y-%m-%d')
+                    except (ValueError, TypeError):
+                        pass
                 
                 # DIMを計算
                 dim_display = ""
+                dim_sort = -1
                 if event_date:
                     try:
                         event_dt = datetime.strptime(event_date, '%Y-%m-%d')
@@ -1776,6 +1963,7 @@ class ConceptionRateMixin:
                                 dim = (event_dt - calv_dt).days
                                 if dim >= 0:
                                     dim_display = str(dim)
+                                    dim_sort = dim
                     except Exception as e:
                         logging.debug(f"DIM計算エラー: {e}")
                 
@@ -1783,7 +1971,7 @@ class ConceptionRateMixin:
                 json_data_str = ai_event.get('json_data') or '{}'
                 try:
                     json_data = json.loads(json_data_str) if isinstance(json_data_str, str) else json_data_str
-                except:
+                except Exception:
                     json_data = {}
                 sire = json_data.get('sire', '') or ''
                 
@@ -1798,6 +1986,12 @@ class ConceptionRateMixin:
                 
                 # 授精回数（保持されている値を使用）
                 insemination_count = event_data.get('insemination_count', '') or ''
+                insem_count_sort = -1
+                try:
+                    if str(insemination_count).strip() != '':
+                        insem_count_sort = int(str(insemination_count).strip())
+                except (ValueError, TypeError):
+                    pass
                 
                 # 授精種類
                 # 様々なキー名を試す（insemination_type_codeも含む）
@@ -1835,50 +2029,168 @@ class ConceptionRateMixin:
                     elif ai_type_code == 'R':
                         logging.debug(f"授精種類が'R'（連続授精）のためスキップ")
                 
-                # 結果（P, O, R, 未鑑定）
+                # 結果（妊娠/空胎/連注/流産/未鑑定）
                 result = ""
                 if event_data['conceived']:
-                    result = "P"
+                    result = "妊娠"
                 elif event_data.get('other_reason') == 'R' or event_data.get('undetermined'):
-                    # 7日以内の連続授精（other_reason='R'）および旧ロジック互換の未確定フラグはR表示
-                    result = "R"
+                    # 7日以内の連続授精（other_reason='R'）および旧ロジック互換の未確定フラグは連注表示
+                    result = "連注"
                 elif event_data.get('other_reason') == 'undetermined_no_result':
                     result = "未鑑定"
                 else:
-                    # DBのoutcomeを参照し、無い場合は未鑑定表示（既存データの整合性のため）
+                    # DBのoutcomeを参照し、S値に応じて日本語表示
                     ai_json = event_data.get('ai_event', {}).get('json_data') or {}
                     if isinstance(ai_json, str):
                         try:
                             ai_json = json.loads(ai_json)
                         except Exception:
                             ai_json = {}
-                    if not ai_json.get('outcome') or ai_json.get('_dc305_no_result'):
+                    outcome = (ai_json.get('outcome') or '').upper()
+                    if not outcome or ai_json.get('_dc305_no_result'):
                         result = "未鑑定"
+                    elif outcome == 'A':
+                        result = "流産"
+                    elif outcome == 'R':
+                        result = "連注"
                     else:
-                        result = "O"
-                
-                # 行を追加
-                item_id = treeview.insert('', tk.END, values=[
-                    cow_id,
-                    event_date,
-                    dim_display,
-                    sire,
-                    technician_name,
-                    insemination_count,
-                    ai_type_name,
-                    result
-                ], tags=(cow_id,))  # タグにcow_idを保存
-            
-            # ダブルクリックイベントをバインド（個体カードを開く）
+                        result = "空胎"
+
+                # 結果による色タグを決定
+                if result == '妊娠':
+                    result_tag = 'result_P'
+                elif result == '空胎':
+                    result_tag = 'result_O'
+                elif result == '流産':
+                    result_tag = 'result_A'
+                else:  # 連注 / 未鑑定
+                    result_tag = 'result_pending'
+
+                row_records.append({
+                    'values': (
+                        cow_id,
+                        event_date,
+                        dim_display,
+                        sire,
+                        technician_name,
+                        insemination_count,
+                        ai_type_name,
+                        result,
+                    ),
+                    'tag': result_tag,
+                    'auto_id': cow.get('auto_id'),
+                    'sort_date': event_dt_sort,
+                    'sort_dim': dim_sort,
+                    'sort_insem': insem_count_sort,
+                    'sort_result': _result_order_map.get(result, 9),
+                    'cow_id': cow_id,
+                })
+
+            # ソート状態: 列名 -> 0=元順 / 1=昇順 / 2=降順
+            sort_state = {col: 0 for col in columns}
+            _indexed = list(enumerate(row_records))
+
+            def _sort_key(col_name: str, rec: Dict[str, Any]):
+                if col_name == 'ID':
+                    v = rec.get('cow_id') or ''
+                    try:
+                        return (0, int(v))
+                    except (ValueError, TypeError):
+                        return (1, str(v))
+                if col_name == '日付':
+                    dt = rec.get('sort_date')
+                    return dt if dt is not None else datetime.min
+                if col_name == 'DIM':
+                    return rec.get('sort_dim', -1)
+                if col_name == 'SIRE':
+                    return rec['values'][3] or ''
+                if col_name == '授精師':
+                    return rec['values'][4] or ''
+                if col_name == '授精回数':
+                    return rec.get('sort_insem', -1)
+                if col_name == '授精種類':
+                    return rec['values'][6] or ''
+                if col_name == '結果':
+                    return rec.get('sort_result', 9)
+                return ''
+
+            def _populate(indexed_list):
+                for iid in list(treeview.get_children()):
+                    treeview.delete(iid)
+                auto_id_map.clear()
+                for _, rec in indexed_list:
+                    item_id = treeview.insert('', tk.END, values=rec['values'], tags=(rec['tag'],))
+                    auto_id_map[item_id] = rec['auto_id']
+
+            def _on_header_click(col_name: str):
+                prev = sort_state[col_name]
+                for c in columns:
+                    sort_state[c] = 0
+                next_s = (prev + 1) % 3
+                sort_state[col_name] = next_s
+                for c in columns:
+                    s = sort_state[c]
+                    marker = ' ▲' if s == 1 else (' ▼' if s == 2 else '')
+                    treeview.heading(c, text=f"{c}{marker}",
+                                     command=lambda _c=c: _on_header_click(_c))
+                if next_s == 0:
+                    _populate(_indexed)
+                else:
+                    rev = (next_s == 2)
+                    _populate(sorted(_indexed, key=lambda x: _sort_key(col_name, x[1]), reverse=rev))
+
+            for col in columns:
+                treeview.heading(col, text=col, command=lambda c=col: _on_header_click(c))
+
+            _populate(_indexed)
+
+            # 重複防止: auto_id → CowCardWindow
+            _open_card_windows: Dict[int, Any] = {}
+
+            # ダブルクリックで個体カードを独立ウィンドウで開く（妊娠率詳細と同方式）
             def on_row_double_click(event):
-                selection = treeview.selection()
-                if selection:
-                    item = selection[0]
-                    tags = treeview.item(item, 'tags')
-                    if tags:
-                        cow_id = tags[0]
-                        self._jump_to_cow_card(cow_id)
-            
+                item = treeview.identify_row(event.y)
+                if not item:
+                    return
+                auto_id = auto_id_map.get(item)
+                if not auto_id:
+                    return
+                # 既に開いていれば前面に
+                existing = _open_card_windows.get(auto_id)
+                if existing is not None:
+                    try:
+                        if existing.window.winfo_exists():
+                            existing.window.lift()
+                            existing.window.focus_set()
+                            return
+                    except Exception:
+                        pass
+                try:
+                    from ui.cow_card_window import CowCardWindow
+                    from constants import CONFIG_DEFAULT_DIR
+                    event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
+                    item_dict_path  = CONFIG_DEFAULT_DIR / "item_dictionary.json"
+                    ccw = CowCardWindow(
+                        parent=self.root,
+                        db_handler=self.db,
+                        formula_engine=self.formula_engine,
+                        rule_engine=self.rule_engine,
+                        event_dictionary_path=event_dict_path if event_dict_path.exists() else None,
+                        item_dictionary_path=item_dict_path if item_dict_path.exists() else None,
+                        cow_auto_id=auto_id,
+                    )
+                    _open_card_windows[auto_id] = ccw
+
+                    def _on_card_close(_aid=auto_id):
+                        _open_card_windows.pop(_aid, None)
+                        ccw.window.destroy()
+
+                    ccw.window.protocol("WM_DELETE_WINDOW", _on_card_close)
+                    ccw.show()
+                except Exception as ex:
+                    logging.error(f"受胎率イベントリスト 個体カード起動エラー: {ex}", exc_info=True)
+                    messagebox.showerror("エラー", str(ex), parent=window)
+
             treeview.bind("<Double-Button-1>", on_row_double_click)
             
         except Exception as e:
@@ -1914,6 +2226,11 @@ class ConceptionRateMixin:
                 if e and not self.end_date_placeholder_shown:
                     end_date = e
 
+            condition_text = ""
+            if hasattr(self, 'pregnancy_rate_condition_entry') and self.pregnancy_rate_condition_entry.winfo_exists():
+                if not self.pregnancy_rate_condition_placeholder_shown:
+                    condition_text = self.pregnancy_rate_condition_entry.get().strip()
+
             period_text = f"{start_date} ～ {end_date}" if start_date and end_date else "全期間"
             self.add_message(role="system", text=f"妊娠率（DIM別）を計算しています… VWP={vwp}日 / 期間: {period_text}")
             self.result_notebook.select(0)
@@ -1927,9 +2244,15 @@ class ConceptionRateMixin:
                         formula_engine=self.formula_engine,
                         vwp=vwp
                     )
-                    results = analyzer.analyze_by_dim(start_date, end_date)
-                    self.root.after(0, lambda: self._display_pregnancy_rate_dim_result(
-                        results, vwp, period_text
+                    cow_filter = None
+                    if condition_text:
+                        def _cf(cow):
+                            return self._evaluate_cow_condition_for_conception_rate(
+                                cow, condition_text, self.db)
+                        cow_filter = _cf
+                    results = analyzer.analyze_by_dim(start_date, end_date, cow_filter=cow_filter)
+                    self.root.after(0, lambda res=results, ct=condition_text: self._display_pregnancy_rate_dim_result(
+                        res, vwp, period_text, ct
                     ))
                 except Exception as ex:
                     err = str(ex)
@@ -1945,7 +2268,8 @@ class ConceptionRateMixin:
             logging.error(f"妊娠率（DIM別）コマンド実行エラー: {e}", exc_info=True)
             self.add_message(role="system", text=f"妊娠率（DIM別）の計算中にエラーが発生しました: {e}")
 
-    def _display_pregnancy_rate_dim_result(self, results, vwp: int, period_text: str):
+    def _display_pregnancy_rate_dim_result(self, results, vwp: int, period_text: str,
+                                           condition_text: str = ""):
         """DIMレンジ別妊娠率結果を表とグラフで表示"""
         try:
             if not results:
@@ -2000,7 +2324,12 @@ class ConceptionRateMixin:
             ])
 
             title = f"妊娠率（DIM別）VWP={vwp}日"
+            if condition_text:
+                title = f"{title}：{condition_text}"
             self._display_list_result_in_table(headers, rows, title, period=period_text)
+
+            # ヒートマップ着色（妊娠率%列: ≥20%→薄緑、未満→無色）
+            self._apply_pregnancy_rate_heatmap()
 
             if MATPLOTLIB_AVAILABLE:
                 self._display_pregnancy_rate_dim_graph(results, title=title, period_text=period_text)
@@ -2115,7 +2444,7 @@ class ConceptionRateMixin:
             graph_win.geometry(f"{_win_w}x{_win_h}+{max(0,_gx)}+{max(0,_gy)}")
 
             # matplotlib キャンバス
-            figure = Figure(figsize=(11.5, 5.2), dpi=92)
+            figure = Figure(figsize=(11.5, 5.2), dpi=100)
             mpl_canvas = FigureCanvasTkAgg(figure, graph_win)
             mpl_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=(6, 2))
 
@@ -2135,7 +2464,9 @@ class ConceptionRateMixin:
             # ── 描画関数 ─────────────────────────────────────────────────
             def draw_graph():
                 figure.clear()
+                figure.patch.set_facecolor('white')
                 ax1 = figure.add_subplot(111)
+                ax1.set_facecolor('white')
                 ax2 = ax1.twinx()
 
                 # 積み上げ棒グラフ
@@ -2180,7 +2511,11 @@ class ConceptionRateMixin:
                 ax1.set_ylabel('割合（%）', fontsize=10)
                 ax1.set_ylim(0, 105)
                 ax1.yaxis.set_major_locator(plt.MultipleLocator(10))
-                ax1.grid(axis='y', alpha=0.35, zorder=0)
+                ax1.grid(axis='y', color='#e0e0e0', linewidth=0.8, zorder=0)
+                ax1.spines['top'].set_color('#cccccc')
+                ax1.spines['left'].set_color('#cccccc')
+                ax1.spines['bottom'].set_color('#cccccc')
+                ax1.tick_params(colors='#555555')
 
                 # 右Y軸（オレンジラベル）
                 _open_max = max(still_open) if still_open else 100
@@ -2310,3 +2645,445 @@ class ConceptionRateMixin:
         except Exception as ex:
             logging.error(f"_save_figure_as_file エラー: {ex}", exc_info=True)
             self.add_message(role="system", text=f"グラフの保存中にエラーが発生しました: {ex}")
+
+    # ------------------------------------------------------------------
+    # 妊娠率表: ダブルクリック → サイクル個体詳細ウィンドウ
+    # ------------------------------------------------------------------
+
+    def _on_pregnancy_rate_row_double_click(self, event):
+        """妊娠率表の行をダブルクリック → そのサイクルの個体一覧を表示"""
+        if not hasattr(self, '_pr_cycle_results') or not self._pr_cycle_results:
+            return
+        tree = self.result_treeview
+        item = tree.identify_row(event.y)
+        if not item:
+            return
+        tree.selection_set(item)
+
+        children = list(tree.get_children())
+        try:
+            row_index = children.index(item)
+        except ValueError:
+            return
+
+        # 合計行（最後の行）は対象外
+        if row_index >= len(self._pr_cycle_results):
+            return
+
+        r = self._pr_cycle_results[row_index]
+
+        def fetch_in_thread():
+            try:
+                from modules.reproduction_analysis import ReproductionAnalysis, Cycle
+                analyzer = ReproductionAnalysis(
+                    db=self.db,
+                    rule_engine=self.rule_engine,
+                    formula_engine=self.formula_engine,
+                    vwp=getattr(self, '_pr_vwp', 50)
+                )
+                cycle = Cycle(
+                    cycle_number=r.cycle_number,
+                    start_date=r.start_date,
+                    end_date=r.end_date
+                )
+                # 経産牛のみ対象（未経産牛 lact=0 or None は除外）
+                cows = [c for c in self.db.get_all_cows() if (c.get('lact') or 0) >= 1]
+                cf = getattr(self, '_pr_cow_filter', None)
+                if cf:
+                    cows = [c for c in cows if cf(c)]
+                today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                details = analyzer.get_cycle_cow_details(cycle, cows, today)
+                self.root.after(0, lambda: self._show_pregnancy_rate_cycle_detail(r, details))
+            except Exception as ex:
+                logging.error(f"サイクル詳細取得エラー: {ex}", exc_info=True)
+                self.root.after(0, lambda msg=str(ex): self.add_message(
+                    role="system", text=f"サイクル詳細の取得中にエラーが発生しました: {msg}"
+                ))
+
+        threading.Thread(target=fetch_in_thread, daemon=True).start()
+
+    def _show_pregnancy_rate_cycle_detail(self, r, details):
+        """サイクル別個体詳細ウィンドウを表示"""
+        try:
+            def fmt_date(d):
+                try:
+                    dt = datetime.strptime(d, '%Y-%m-%d')
+                    return f"{dt.month}/{dt.day}"
+                except Exception:
+                    return d
+
+            win_title = f"サイクル詳細  {fmt_date(r.start_date)} ～ {fmt_date(r.end_date)}"
+            win = tk.Toplevel(self.root)
+            win.title(win_title)
+            win.transient(self.root)
+
+            self.root.update_idletasks()
+            wx = self.root.winfo_x() + 80
+            wy = self.root.winfo_y() + 80
+            win.geometry(f"820x500+{wx}+{wy}")
+
+            _font = (getattr(self, '_main_font_family', 'Meiryo UI'), 9)
+
+            # 農場設定から授精師・授精種類コードを読み込む
+            inseminator_codes: dict = {}
+            insemination_type_codes: dict = {}
+            try:
+                from settings_manager import SettingsManager
+                _sm = SettingsManager(self.farm_path)
+                inseminator_codes = _sm.get('inseminator_codes', {}) or {}
+                _ins_file = self.farm_path / "insemination_settings.json"
+                if _ins_file.exists():
+                    with open(_ins_file, 'r', encoding='utf-8') as _f:
+                        insemination_type_codes = json.load(_f).get('insemination_types', {}) or {}
+                if not insemination_type_codes:
+                    insemination_type_codes = _sm.get('insemination_type_codes', {}) or {}
+            except Exception:
+                pass
+
+            def _resolve_technician(code: str) -> str:
+                if not code:
+                    return ''
+                name = inseminator_codes.get(code)
+                if name is None and code.isdigit():
+                    name = inseminator_codes.get(int(code))
+                return name if name else code
+
+            def _resolve_ai_type(code: str) -> str:
+                if not code:
+                    return ''
+                name = insemination_type_codes.get(code)
+                if name is None:
+                    for k, v in insemination_type_codes.items():
+                        if str(k).upper() == code.upper():
+                            name = v
+                            break
+                return name if name else code
+
+            # サマリー行
+            parts = [f"繁殖対象 {r.br_el}頭", f"授精 {r.bred}頭"]
+            if r.preg_eligible > 0:
+                parts.append(f"妊娠 {r.preg}頭")
+                parts.append(f"妊娠率 {int(r.pr)}%")
+            tk.Label(win, text="  ".join(parts), font=_font, anchor=tk.W).pack(
+                fill=tk.X, padx=10, pady=(8, 4)
+            )
+
+            # Treeview
+            columns = ("ID", "産次", "DIM", "SIRE", "授精師", "授精種類", "授精回数", "結果")
+            frame = ttk.Frame(win)
+            frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 2))
+
+            vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL)
+            vsb.pack(side=tk.RIGHT, fill=tk.Y)
+            hsb = ttk.Scrollbar(frame, orient=tk.HORIZONTAL)
+            hsb.pack(side=tk.BOTTOM, fill=tk.X)
+            tree = ttk.Treeview(frame, columns=columns, show="headings",
+                                yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            vsb.config(command=tree.yview)
+            hsb.config(command=tree.xview)
+            tree.pack(fill=tk.BOTH, expand=True)
+
+            col_conf = {"ID": (65, tk.CENTER), "産次": (50, tk.CENTER),
+                        "DIM": (50, tk.CENTER), "SIRE": (100, tk.W),
+                        "授精師": (80, tk.W), "授精種類": (90, tk.W),
+                        "授精回数": (65, tk.CENTER), "結果": (130, tk.W)}
+            for col in columns:
+                w, anc = col_conf[col]
+                tree.column(col, width=w, anchor=anc, minwidth=w)
+
+            tree.tag_configure('妊娠',         background='#e8f5e9', foreground='#1b5e20')
+            tree.tag_configure('流産',         background='#fff3e0', foreground='#e65100')
+            tree.tag_configure('授精済(未確定)', background='#e3f2fd', foreground='#0d47a1')
+            tree.tag_configure('空胎',         background='#fce4ec', foreground='#880e4f')
+
+            # ソート状態: col -> 0=元順 / 1=昇順 / 2=降順
+            sort_state = {col: 0 for col in columns}
+            _indexed = list(enumerate(details))  # 元インデックス付きリスト
+            auto_id_map = {}
+
+            _cat_order = {'妊娠': 0, '流産': 1, '授精済(未確定)': 2, '空胎': 3, '未授精': 4}
+
+            def _sort_key(col, d):
+                if col == 'ID':
+                    v = d.get('cow_id') or ''
+                    try:
+                        return (0, int(v))
+                    except (ValueError, TypeError):
+                        return (1, v)
+                elif col == '産次':
+                    v = d.get('lact', '')
+                    try:
+                        return int(v) if v != '' else -1
+                    except (ValueError, TypeError):
+                        return -1
+                elif col == 'DIM':
+                    v = d.get('dim', '')
+                    try:
+                        return int(v) if v != '' else -1
+                    except (ValueError, TypeError):
+                        return -1
+                elif col == '授精回数':
+                    v = d.get('insemination_count', '')
+                    try:
+                        return int(v) if v != '' else -1
+                    except (ValueError, TypeError):
+                        return -1
+                elif col == 'SIRE':
+                    return d.get('sire', '') or ''
+                elif col == '授精師':
+                    return _resolve_technician(d.get('technician_code', ''))
+                elif col == '授精種類':
+                    return _resolve_ai_type(d.get('ai_type_code', ''))
+                else:  # 結果
+                    return _cat_order.get(d.get('category', ''), 9)
+
+            def _populate(indexed_list):
+                for iid in list(tree.get_children()):
+                    tree.delete(iid)
+                auto_id_map.clear()
+                for _, d in indexed_list:
+                    tag = d['category']
+                    iid = tree.insert('', tk.END, values=(
+                        d.get('cow_id', ''),
+                        d.get('lact', ''),
+                        d.get('dim', ''),
+                        d.get('sire', ''),
+                        _resolve_technician(d.get('technician_code', '')),
+                        _resolve_ai_type(d.get('ai_type_code', '')),
+                        d.get('insemination_count', ''),
+                        d['category'],
+                    ), tags=(tag,))
+                    auto_id_map[iid] = d.get('auto_id')
+
+            def _on_header_click(col):
+                prev = sort_state[col]
+                for c in columns:
+                    sort_state[c] = 0
+                next_s = (prev + 1) % 3
+                sort_state[col] = next_s
+                # ヘッダーラベル更新
+                for c in columns:
+                    s = sort_state[c]
+                    marker = ' ▲' if s == 1 else (' ▼' if s == 2 else '')
+                    tree.heading(c, text=f"{c}{marker}",
+                                 command=lambda _c=c: _on_header_click(_c))
+                if next_s == 0:
+                    _populate(_indexed)
+                else:
+                    rev = (next_s == 2)
+                    _populate(sorted(_indexed, key=lambda x: _sort_key(col, x[1]), reverse=rev))
+
+            for col in columns:
+                tree.heading(col, text=col, command=lambda c=col: _on_header_click(c))
+
+            _populate(_indexed)
+
+            tk.Label(win, text=f"合計 {len(details)} 頭（ダブルクリックで個体カード）",
+                     font=(_font[0], _font[1] - 1), foreground='gray', anchor=tk.E).pack(
+                fill=tk.X, padx=12, pady=(2, 6)
+            )
+
+            # 重複防止用: auto_id → CowCardWindow のマップ
+            _open_card_windows: Dict[int, Any] = {}
+
+            def on_row_double_click(event):
+                sel = tree.selection()
+                if not sel:
+                    return
+                auto_id = auto_id_map.get(sel[0])
+                if not auto_id:
+                    return
+                # 既に開いていれば前面に出す
+                existing = _open_card_windows.get(auto_id)
+                if existing is not None:
+                    try:
+                        if existing.window.winfo_exists():
+                            existing.window.lift()
+                            existing.window.focus_set()
+                            return
+                    except Exception:
+                        pass
+                # 新規ウィンドウを開く
+                try:
+                    from ui.cow_card_window import CowCardWindow
+                    from constants import CONFIG_DEFAULT_DIR
+                    event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
+                    item_dict_path  = CONFIG_DEFAULT_DIR / "item_dictionary.json"
+                    ccw = CowCardWindow(
+                        parent=self.root,
+                        db_handler=self.db,
+                        formula_engine=self.formula_engine,
+                        rule_engine=self.rule_engine,
+                        event_dictionary_path=event_dict_path if event_dict_path.exists() else None,
+                        item_dictionary_path=item_dict_path if item_dict_path.exists() else None,
+                        cow_auto_id=auto_id,
+                    )
+                    _open_card_windows[auto_id] = ccw
+
+                    def _on_card_close(_aid=auto_id):
+                        _open_card_windows.pop(_aid, None)
+                        ccw.window.destroy()
+
+                    ccw.window.protocol("WM_DELETE_WINDOW", _on_card_close)
+                    ccw.show()
+                except Exception as ex:
+                    logging.error(f"個体カードウィンドウ起動エラー: {ex}", exc_info=True)
+
+            tree.bind('<Double-Button-1>', on_row_double_click)
+
+        except Exception as e:
+            logging.error(f"サイクル詳細ウィンドウ表示エラー: {e}", exc_info=True)
+
+    def _apply_pregnancy_rate_heatmap(self):
+        """妊娠率テーブルの行をパーセンタイルでヒートマップ着色する
+        上位25%: 薄緑 / 下位25%: 薄赤 / 中間50%: 無色
+        """
+        try:
+            if not hasattr(self, 'result_treeview') or not self.result_treeview.winfo_exists():
+                return
+            tree = self.result_treeview
+
+            cols = list(tree['columns'])
+            try:
+                pr_idx = cols.index('妊娠率%')
+            except ValueError:
+                return
+
+            tree.tag_configure('pr_high',  background='#e8f5e9')  # 上位25%: 薄緑
+            tree.tag_configure('pr_low',   background='#fce4ec')  # 下位25%: 薄赤
+            tree.tag_configure('pr_total', background='#f0f0f0',
+                               font=(self._main_font_family, 9, 'bold'))  # 合計行
+
+            # 合計行を除いた妊娠率の値を収集（"-" は除外）
+            rates: list[tuple] = []
+            for item in tree.get_children():
+                values = tree.item(item, 'values')
+                if not values or len(values) <= pr_idx:
+                    continue
+                if str(values[0]) == '【合計】':
+                    tree.item(item, tags=('pr_total',))
+                    continue
+                rate_str = str(values[pr_idx]).replace('%', '').strip()
+                if rate_str == '-':
+                    continue
+                try:
+                    rates.append((item, float(rate_str)))
+                except (ValueError, TypeError):
+                    continue
+
+            if not rates:
+                return
+
+            # 25・75パーセンタイルを計算
+            sorted_rates = sorted(r for _, r in rates)
+            n = len(sorted_rates)
+            p25 = sorted_rates[max(0, int(n * 0.25) - 1)]
+            p75 = sorted_rates[min(n - 1, int(n * 0.75))]
+
+            for item, rate in rates:
+                if rate >= p75:
+                    tree.item(item, tags=('pr_high',))
+                elif rate <= p25:
+                    tree.item(item, tags=('pr_low',))
+                # 中間: タグなし（無色）
+
+        except Exception as e:
+            logging.error(f"妊娠率ヒートマップ適用エラー: {e}", exc_info=True)
+
+    def _on_pregnancy_rate_row_click(self, event):
+        """妊娠率表の行をシングルクリック → そのサイクルの個体一覧を表示"""
+        if not hasattr(self, '_pr_cycle_results') or not self._pr_cycle_results:
+            return
+        tree = self.result_treeview
+        item = tree.identify_row(event.y)
+        if not item:
+            return
+
+        children = list(tree.get_children())
+        try:
+            row_index = children.index(item)
+        except ValueError:
+            return
+
+        # 合計行（データ行数を超えるインデックス）は対象外
+        if row_index >= len(self._pr_cycle_results):
+            return
+
+        r = self._pr_cycle_results[row_index]
+
+        def fetch_in_thread():
+            try:
+                from modules.reproduction_analysis import ReproductionAnalysis, Cycle
+                analyzer = ReproductionAnalysis(
+                    db=self.db,
+                    rule_engine=self.rule_engine,
+                    formula_engine=self.formula_engine,
+                    vwp=getattr(self, '_pr_vwp', 50)
+                )
+                cycle = Cycle(
+                    cycle_number=r.cycle_number,
+                    start_date=r.start_date,
+                    end_date=r.end_date
+                )
+                cows = [c for c in self.db.get_all_cows() if (c.get('lact') or 0) >= 1]
+                cf = getattr(self, '_pr_cow_filter', None)
+                if cf:
+                    cows = [c for c in cows if cf(c)]
+                today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                details = analyzer.get_cycle_cow_details(cycle, cows, today)
+                self.root.after(0, lambda: self._show_pregnancy_rate_cycle_detail(r, details))
+            except Exception as ex:
+                logging.error(f"サイクル詳細取得エラー: {ex}", exc_info=True)
+                self.root.after(0, lambda msg=str(ex): self.add_message(
+                    role="system", text=f"サイクル詳細の取得中にエラーが発生しました: {msg}"
+                ))
+
+        threading.Thread(target=fetch_in_thread, daemon=True).start()
+
+    def _apply_pr_table_styling(self, headers: list):
+        """妊娠率表の後処理: キー列ヘッダー着色 + 合計行（最終行）太字"""
+        try:
+            if not hasattr(self, 'result_treeview') or not self.result_treeview.winfo_exists():
+                return
+            tree = self.result_treeview
+
+            # ── 合計行（最終行）を太字に ──
+            children = tree.get_children()
+            if children:
+                font_bold = (self._main_font_family, 9, 'bold')
+                tree.tag_configure('pr_total', font=font_bold, background='#f0f0f0')
+                tree.item(children[-1], tags=('pr_total',))
+
+            # ── キー列ヘッダーを PhotoImage で着色 ──
+            HEADER_COLORS = {
+                "授精率%": "#c8e6c9",   # 薄い緑
+                "受胎率%": "#e1bee7",   # 薄い紫
+                "妊娠率%": "#bbdefb",   # 薄い青
+            }
+            # 画像は GC されないよう self に保持
+            if not hasattr(self, '_pr_header_images'):
+                self._pr_header_images = {}
+            else:
+                self._pr_header_images.clear()
+
+            # レイアウト確定後に幅を取得するため update_idletasks を挟む
+            tree.update_idletasks()
+
+            for col in headers:
+                color = HEADER_COLORS.get(col)
+                if not color:
+                    continue
+                try:
+                    col_width = tree.column(col, 'width')
+                    # PhotoImage で単色画像を作成（列幅 × ヘッダー高さ）
+                    img = tk.PhotoImage(width=col_width, height=20)
+                    row_str = '{' + ' '.join([color] * col_width) + '}'
+                    img.put(' '.join([row_str] * 20))
+                    self._pr_header_images[col] = img
+                    tree.heading(col, image=img, compound='center')
+                except Exception as e:
+                    logging.debug(f"ヘッダー着色スキップ ({col}): {e}")
+
+        except Exception as e:
+            logging.error(f"妊娠率表スタイル適用エラー: {e}", exc_info=True)
+

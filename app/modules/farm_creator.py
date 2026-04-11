@@ -31,6 +31,7 @@ class FarmCreator:
         self,
         farm_name: str,
         csv_path: Optional[Path] = None,
+        excel_path: Optional[Path] = None,
         template_farm_path: Optional[Path] = None
     ) -> Path:
         """
@@ -66,12 +67,16 @@ class FarmCreator:
         if template_farm_path:
             self._copy_template_settings(template_farm_path)
         
-        # CSVからデータを読み込む（オプション）
+        # CSVからデータを読み込む（乳検速報、オプション）
         if csv_path:
             self._import_from_csv(db, csv_path)
-        
+
+        # Excelから個体一括登録（オプション）
+        if excel_path:
+            self._import_from_excel(db, excel_path)
+
         db.close()
-        
+
         return self.farm_path
     
     def _copy_template_settings(self, template_farm_path: Path):
@@ -96,6 +101,11 @@ class FarmCreator:
         reproduction_treatment_settings_file = template_farm_path / "reproduction_treatment_settings.json"
         if reproduction_treatment_settings_file.exists():
             shutil.copy2(reproduction_treatment_settings_file, self.farm_path / "reproduction_treatment_settings.json")
+
+        # 薬品設定（製品名・単価・処置料）
+        drug_settings_file = template_farm_path / "drug_settings.json"
+        if drug_settings_file.exists():
+            shutil.copy2(drug_settings_file, self.farm_path / "drug_settings.json")
     
     def _import_from_csv(self, db: DBHandler, csv_path: Path):
         """
@@ -221,6 +231,226 @@ class FarmCreator:
             # 状態を更新
             rule_engine._recalculate_and_update_cow(cow_auto_id)
     
+    def _import_from_excel(self, db: DBHandler, excel_path: Path):
+        """
+        個体一括登録Excelテンプレートからデータをインポート。
+        cow_registration_import_window.py の取り込みロジックと同等の処理。
+        """
+        try:
+            xl = pd.ExcelFile(excel_path, engine='openpyxl')
+            sheet = '個体情報' if '個体情報' in xl.sheet_names else xl.sheet_names[0]
+            df = pd.read_excel(excel_path, sheet_name=sheet, dtype=str, engine='openpyxl')
+        except ImportError:
+            raise RuntimeError("Excelを読み込むには openpyxl が必要です。pip install openpyxl")
+
+        headers = df.columns.tolist()
+
+        def find_col(keywords):
+            for idx, h in enumerate(headers):
+                if pd.notna(h):
+                    s = str(h).strip().replace(' ', '').replace('\u3000', '')
+                    for kw in keywords:
+                        k = kw.replace(' ', '').replace('\u3000', '')
+                        if s == k or s.upper() == k.upper():
+                            return idx
+            for idx, h in enumerate(headers):
+                if pd.notna(h):
+                    s = str(h).strip().upper()
+                    for kw in keywords:
+                        if kw.upper() in s or s in kw.upper():
+                            return idx
+            return None
+
+        col_jpn10      = find_col(['JPN10', '個体識別番号', '個体識別', '識別番号'])
+        col_brd        = find_col(['品種', 'BRD'])
+        col_pen        = find_col(['群(PEN)', '群', 'PEN', '群番号'])
+        col_birth_date = find_col(['生年月日', 'BIRTH', 'BTHD'])
+        col_lact       = find_col(['産次', 'LACT'])
+        col_clvd       = find_col(['最終分娩日', '分娩月日', '分娩日', '分娩', 'CLVD'])
+        col_last_ai    = find_col(['最終授精日', '最終AI日', '最終AI', 'LAST_AI'])
+        col_ai_sire    = find_col(['最終授精SIRE', 'SIRE', '種雄牛'])
+        col_ai_count   = find_col(['授精回数', 'AI回数', 'AI_COUNT'])
+        col_pregnant   = find_col(['妊娠状態', '妊娠', 'PREGNANT'])
+        col_dam        = find_col(['母牛識別番号', '母牛識別番', '母牛', 'DAM'])
+        col_intro_date = find_col(['導入日', '入牧日', 'INTRO'])
+        col_memo       = find_col(['メモ', 'NOTE', '備考'])
+
+        num_cols = len(df.columns)
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        def getv(row, col, default=''):
+            if col is None or col >= num_cols:
+                return default
+            try:
+                val = row.iloc[col]
+                if pd.isna(val):
+                    return default
+                s = str(val).strip()
+                return '' if s.lower() in ('nan', 'none', '') else s
+            except Exception:
+                return default
+
+        def norm_date(s):
+            if not s:
+                return None
+            for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y%m%d', '%m/%d/%Y'):
+                try:
+                    return datetime.strptime(s, fmt).strftime('%Y-%m-%d')
+                except Exception:
+                    pass
+            try:
+                obj = pd.to_datetime(s, errors='coerce')
+                if pd.notna(obj):
+                    return obj.strftime('%Y-%m-%d')
+            except Exception:
+                pass
+            return None
+
+        rule_engine = RuleEngine(db)
+
+        for _, row in df.iterrows():
+            if row.isna().all():
+                continue
+
+            jpn10 = getv(row, col_jpn10)
+            if not jpn10 or len(jpn10) != 10 or not jpn10.isdigit():
+                continue
+
+            cow_id = jpn10[5:9].zfill(4)
+
+            brd  = getv(row, col_brd) or 'ホルスタイン' if col_brd is None else getv(row, col_brd) or 'ホルスタイン'
+            pen  = getv(row, col_pen) or '1' if col_pen is None else getv(row, col_pen) or '1'
+
+            birth_date = norm_date(getv(row, col_birth_date))
+            lact_str   = getv(row, col_lact)
+            lact = 0
+            if lact_str:
+                try:
+                    lact = int(float(lact_str))
+                except Exception:
+                    pass
+
+            clvd         = norm_date(getv(row, col_clvd))
+            last_ai_date = norm_date(getv(row, col_last_ai))
+            last_ai_sire = getv(row, col_ai_sire)
+
+            ai_count_str = getv(row, col_ai_count)
+            ai_count = 0
+            if ai_count_str:
+                try:
+                    ai_count = int(float(ai_count_str))
+                except Exception:
+                    pass
+
+            pregnant_status = getv(row, col_pregnant)
+            if not pregnant_status and last_ai_date:
+                pregnant_status = '妊娠鑑定待ち'
+
+            dam        = getv(row, col_dam)
+            intro_date = norm_date(getv(row, col_intro_date)) or today
+            memo       = getv(row, col_memo)
+
+            # 既存個体スキップ
+            existing = db.get_cow_by_id(cow_id)
+            if existing and existing.get('jpn10') == jpn10:
+                cow_auto_id = existing['auto_id']
+            else:
+                # RC 決定
+                if pregnant_status == '妊娠':
+                    rc = RuleEngine.RC_PREGNANT
+                elif pregnant_status == '乾乳':
+                    rc = RuleEngine.RC_DRY
+                elif last_ai_date and pregnant_status == '妊娠鑑定待ち':
+                    rc = RuleEngine.RC_BRED
+                elif clvd and not last_ai_date:
+                    rc = RuleEngine.RC_FRESH
+                else:
+                    rc = RuleEngine.RC_OPEN
+
+                cow_auto_id = db.insert_cow({
+                    'cow_id': cow_id,
+                    'jpn10':  jpn10,
+                    'brd':    brd or None,
+                    'bthd':   birth_date,
+                    'entr':   intro_date,
+                    'lact':   lact,
+                    'clvd':   clvd,
+                    'rc':     rc,
+                    'pen':    pen or None,
+                    'frm':    self.farm_path.name,
+                })
+
+            # 導入イベント
+            eid = db.insert_event({
+                'cow_auto_id':  cow_auto_id,
+                'event_number': RuleEngine.EVENT_IN,
+                'event_date':   intro_date,
+                'json_data': {
+                    'birth_date':    birth_date,
+                    'lactation':     lact,
+                    'calving_date':  clvd,
+                    'last_ai_date':  last_ai_date,
+                    'ai_count':      ai_count,
+                    'dam':           dam,
+                    'source':        'excel_farm_create',
+                },
+                'note': memo or '農場作成時の一括登録',
+            })
+            rule_engine.on_event_added(eid)
+
+            # 分娩イベント（baseline）
+            if clvd:
+                calv_id = db.insert_event({
+                    'cow_auto_id':  cow_auto_id,
+                    'event_number': RuleEngine.EVENT_CALV,
+                    'event_date':   clvd,
+                    'json_data':    {'baseline_calving': True},
+                    'note':         '農場作成時の分娩（baseline）',
+                })
+                rule_engine.on_event_added(calv_id)
+
+            # AI イベント
+            if last_ai_date:
+                ai_json: Dict[str, Any] = {'ai_count': ai_count}
+                if last_ai_sire:
+                    ai_json['sire'] = last_ai_sire
+                if pregnant_status == '受胎なし':
+                    ai_json['result'] = 'O'
+                elif pregnant_status in ('妊娠', '乾乳'):
+                    ai_json['result'] = 'P'
+
+                ai_id = db.insert_event({
+                    'cow_auto_id':  cow_auto_id,
+                    'event_number': RuleEngine.EVENT_AI,
+                    'event_date':   last_ai_date,
+                    'json_data':    ai_json,
+                    'note':         f'授精回数: {ai_count}',
+                })
+                rule_engine.on_event_added(ai_id)
+
+                if pregnant_status in ('妊娠', '乾乳'):
+                    preg_id = db.insert_event({
+                        'cow_auto_id':  cow_auto_id,
+                        'event_number': RuleEngine.EVENT_PDP,
+                        'event_date':   last_ai_date,
+                        'json_data':    {'twin': False},
+                        'note':         '農場作成時の妊娠',
+                    })
+                    rule_engine.on_event_added(preg_id)
+
+                if pregnant_status == '乾乳':
+                    dry_id = db.insert_event({
+                        'cow_auto_id':  cow_auto_id,
+                        'event_number': RuleEngine.EVENT_DRY,
+                        'event_date':   intro_date,
+                        'json_data':    {},
+                        'note':         '農場作成時の乾乳',
+                    })
+                    rule_engine.on_event_added(dry_id)
+
+            rule_engine.apply_events(cow_auto_id)
+            rule_engine._recalculate_and_update_cow(cow_auto_id)
+
     def _parse_csv(self, csv_path: Path) -> Tuple[str, List[Dict[str, Any]]]:
         """
         CSVファイルを読み込んで、検定日とデータ行を返す

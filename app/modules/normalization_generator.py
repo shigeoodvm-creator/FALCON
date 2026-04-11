@@ -22,24 +22,27 @@ def generate_normalization_dict(farm_path: Path = None):
         scripts/generate_normalization_dict.py を実行して辞書を生成
     """
     try:
-        # スクリプトパス
-        base_dir = Path(__file__).parent.parent.parent
-        script_path = base_dir / "scripts" / "generate_normalization_dict.py"
-        
+        # EXE モードでは normalization はバンドル済みのためスキップ
+        if getattr(sys, "frozen", False):
+            logger.info("EXE mode: normalization辞書はバンドル済みのため自動生成をスキップ")
+            return True
+
+        from constants import FALCON_ROOT
+        script_path = FALCON_ROOT / "scripts" / "generate_normalization_dict.py"
+
         if not script_path.exists():
             logger.warning(f"normalization辞書生成スクリプトが見つかりません: {script_path}")
             return False
-        
-        # スクリプトを実行
+
         result = subprocess.run(
             [sys.executable, str(script_path)],
-            cwd=str(base_dir),
+            cwd=str(FALCON_ROOT),
             capture_output=True,
             text=True,
             encoding='utf-8',
             errors='ignore'
         )
-        
+
         if result.returncode == 0:
             logger.info("normalization辞書を自動生成しました")
             return True

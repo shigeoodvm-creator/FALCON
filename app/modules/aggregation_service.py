@@ -262,6 +262,7 @@ class AggregationService:
         定義（固定）:
         - 分母：AI + ET かつ outcome != 'R'（流産・再発情以外）
         - 分子：AI + ET かつ outcome = 'P'（妊娠確定）
+        - cow.entr（登録日）が入っている個体は、event_date >= entr の授精のみ集計（メイン画面の受胎率と同一ルール）
         
         Args:
             start_date: 開始日（YYYY-MM-DD形式）
@@ -393,6 +394,15 @@ class AggregationService:
               AND e.event_date >= ?
               AND e.event_date <= ?
               AND e.deleted = 0
+              AND EXISTS (
+                SELECT 1 FROM cow c
+                WHERE c.auto_id = e.cow_auto_id
+                  AND (
+                    c.entr IS NULL
+                    OR TRIM(COALESCE(c.entr, '')) = ''
+                    OR e.event_date >= c.entr
+                  )
+              )
             GROUP BY m.ym
             ORDER BY m.ym
         """, (start_date, start_date, end_date, start_date, end_date))

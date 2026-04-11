@@ -26,7 +26,8 @@ class RuleEngine:
     EVENT_STOPR = 204       # 繁殖停止
     EVENT_SOLD = 205        # 売却
     EVENT_DEAD = 206        # 死亡・淘汰
-    
+    EVENT_BLV = 208          # BLV結果（牛伝染性リンパ腫ウイルス）
+
     EVENT_PDN = 302         # 妊娠鑑定マイナス
     EVENT_PDP = 303         # 妊娠鑑定プラス
     EVENT_PDP2 = 304        # 妊娠鑑定プラス（検診以外）

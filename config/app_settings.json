@@ -1,18 +1,19 @@
 {
   "font_family": "MS Gothic",
-  "font_size": 11,
+  "font_size": 9,
   "selected_month_1": 1,
   "selected_month_2": 11,
   "dont_show_herd_dynamics_report_info": true,
   "genome_report_selected_keys": [
-    "GFAT",
-    "GSCS",
-    "GFE",
-    "G乳量"
+    "G乳量",
+    "GCCR",
+    "GDPR",
+    "GRFI"
   ],
   "genome_report_composite_index": "GDWP$",
   "genome_report_date_from": null,
   "genome_report_date_to": null,
   "genome_report_show_trend": true,
-  "genome_report_show_avg_line": true
+  "genome_report_show_avg_line": true,
+  "assist_mode": false
 }

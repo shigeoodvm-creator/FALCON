@@ -46,6 +46,20 @@
     "name_jp": "死亡・廃用",
     "category": "MANAGEMENT"
   },
+  "208": {
+    "alias": "BLV",
+    "name_jp": "BLV結果",
+    "category": "HEALTH",
+    "display_color": "#6a1b9a",
+    "input_fields": [
+      {
+        "key": "blv_result",
+        "label": "結果",
+        "datatype": "str",
+        "choices": ["未検査", "陰性", "陽性"]
+      }
+    ]
+  },
   "302": {
     "alias": "PDN",
     "name_jp": "妊娠鑑定マイナス",
@@ -77,6 +91,11 @@
         "key": "other",
         "label": "その他",
         "datatype": "str"
+      },
+      {
+        "key": "cycle_day",
+        "label": "発情周期Day",
+        "datatype": "int"
       }
     ]
   },
@@ -91,6 +110,11 @@
         "key": "twin",
         "label": "双子",
         "datatype": "bool"
+      },
+      {
+        "key": "sex",
+        "label": "性別(♂/♀)",
+        "datatype": "str"
       }
     ]
   },
@@ -135,7 +159,19 @@
     "name_jp": "PAGプラス",
     "category": "PREGNANCY",
     "outcome": "POSITIVE",
-    "display_color": "#008000"
+    "display_color": "#008000",
+    "input_fields": [
+      {
+        "key": "sex",
+        "label": "性別(♂/♀)",
+        "datatype": "str"
+      },
+      {
+        "key": "twin",
+        "label": "双子",
+        "datatype": "bool"
+      }
+    ]
   },
   "601": {
     "alias": "MILK_TEST",
@@ -299,6 +335,11 @@
         "key": "other",
         "label": "その他",
         "datatype": "str"
+      },
+      {
+        "key": "cycle_day",
+        "label": "発情周期Day",
+        "datatype": "int"
       }
     ]
   },
@@ -332,6 +373,11 @@
         "key": "other",
         "label": "その他",
         "datatype": "str"
+      },
+      {
+        "key": "cycle_day",
+        "label": "発情周期Day",
+        "datatype": "int"
       }
     ]
   },
@@ -347,6 +393,18 @@
         "datatype": "str",
         "required": true,
         "description": "入力必須。そこから自動的に拡大４桁を取得"
+      },
+      {
+        "key": "tag",
+        "label": "TAG（タグ）",
+        "datatype": "str",
+        "description": "任意。農場独自の管理番号（一覧・個体カードのタグ項目に保存）"
+      },
+      {
+        "key": "registration_date",
+        "label": "登録日（繁殖指標の起点）",
+        "datatype": "str",
+        "description": "空欄のときはイベント日付と同じ。新規農場で全頭同一の集計開始日にしたい場合などに入力"
       },
       {
         "key": "breed",

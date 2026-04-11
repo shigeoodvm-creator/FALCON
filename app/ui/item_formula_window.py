@@ -1,6 +1,6 @@
 """
-FALCON2 - 計算式確認・編集ウィンドウ
-calc/event 項目の formula / source を表示・更新する
+FALCON2 - 計算式確認ウィンドウ
+calc/event 項目の formula / source を表示する（read_only 時は参照のみ）
 """
 
 import json
@@ -23,19 +23,24 @@ class ItemFormulaWindow:
         parent: tk.Tk,
         item_key: str,
         item_data: Dict[str, Any],
-        item_dictionary_path: Path,
+        item_dictionary_path: Optional[Path] = None,
         on_saved: Optional[Callable[[], None]] = None,
+        read_only: bool = False,
     ):
         self.parent = parent
         self.item_key = item_key
         self.item_data = item_data.copy()
         self.item_dictionary_path = item_dictionary_path
         self.on_saved = on_saved
+        self.read_only = read_only
 
         self.origin = item_data.get("origin") or item_data.get("type") or "calc"
 
         self.window = tk.Toplevel(parent)
-        self.window.title(f"計算式を確認 - {item_key}")
+        title = f"計算式を確認 - {item_key}"
+        if read_only:
+            title += "（参照のみ）"
+        self.window.title(title)
         self.window.geometry("760x560")
 
         self._create_widgets()
@@ -72,36 +77,48 @@ class ItemFormulaWindow:
         self.formula_text = scrolledtext.ScrolledText(formula_frame, height=12)
         self.formula_text.pack(fill=tk.BOTH, expand=True)
 
-        btn_frame = ttk.Frame(formula_frame)
-        btn_frame.pack(fill=tk.X, pady=6)
-        if self.origin == "calc":
-            ttk.Button(
-                btn_frame,
-                text="AIに計算式を作ってもらう",
-                command=self._generate_formula_with_ai,
-                width=24,
-            ).pack(side=tk.LEFT, padx=4)
+        if not self.read_only:
+            btn_frame = ttk.Frame(formula_frame)
+            btn_frame.pack(fill=tk.X, pady=6)
+            if self.origin == "calc":
+                ttk.Button(
+                    btn_frame,
+                    text="AIに計算式を作ってもらう",
+                    command=self._generate_formula_with_ai,
+                    width=24,
+                ).pack(side=tk.LEFT, padx=4)
 
-        save_frame = ttk.Frame(main_frame)
-        save_frame.pack(fill=tk.X, pady=8)
-        ttk.Button(save_frame, text="保存", command=self._on_save, width=12).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(save_frame, text="キャンセル", command=self.window.destroy, width=12).pack(
-            side=tk.LEFT, padx=5
-        )
+        btn_row = ttk.Frame(main_frame)
+        btn_row.pack(fill=tk.X, pady=8)
+        if self.read_only:
+            ttk.Button(btn_row, text="閉じる", command=self.window.destroy, width=12).pack(
+                side=tk.LEFT, padx=5
+            )
+        else:
+            ttk.Button(btn_row, text="保存", command=self._on_save, width=12).pack(
+                side=tk.LEFT, padx=5
+            )
+            ttk.Button(btn_row, text="キャンセル", command=self.window.destroy, width=12).pack(
+                side=tk.LEFT, padx=5
+            )
 
     def _populate_fields(self):
         if self.origin == "event":
             source = self.item_data.get("source") or ""
             self.formula_text.insert(1.0, source)
-            self.formula_text.config(state=tk.DISABLED)
         else:
             formula = self.item_data.get("formula") or ""
             self.formula_text.insert(1.0, formula)
+        if self.read_only or self.origin == "event":
+            self.formula_text.config(state=tk.DISABLED)
 
     def _on_save(self):
+        if self.read_only:
+            return
         content = self.formula_text.get(1.0, tk.END).strip()
+        if not self.item_dictionary_path:
+            messagebox.showerror("エラー", "item_dictionary.json のパスが設定されていません")
+            return
         try:
             with open(self.item_dictionary_path, "r", encoding="utf-8") as f:
                 item_dict = json.load(f)

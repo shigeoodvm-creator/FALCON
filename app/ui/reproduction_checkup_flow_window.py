@@ -10,7 +10,7 @@ import logging
 import tempfile
 import webbrowser
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
@@ -61,9 +61,9 @@ class ReproductionCheckupFlowWindow:
         # ウィンドウ作成（データ吸い込みウィンドウと同一デザイン）
         self.window = tk.Toplevel(parent)
         self.window.title("繁殖検診フロー")
-        self.window.geometry("520x820")
+        self.window.geometry("800x920")
         self.window.configure(bg="#f5f5f5")
-        self.window.minsize(480, 420)
+        self.window.minsize(720, 560)
         
         # UI作成
         self._create_widgets()
@@ -82,6 +82,8 @@ class ReproductionCheckupFlowWindow:
         card_pad = 16
         btn_primary_bg = "#3949ab"
         btn_primary_fg = "#ffffff"
+        btn_secondary_bg = "#eceff1"
+        btn_secondary_fg = "#37474f"
         btn_secondary_bd = "#b0bec5"
         
         # ヘッダー
@@ -148,12 +150,72 @@ class ReproductionCheckupFlowWindow:
                            activebackground="#303f9f", activeforeground="#ffffff", relief=tk.FLAT,
                            padx=16, pady=8, cursor="hand2", command=command)
             btn.pack(side=tk.RIGHT, padx=(10, 0))
+
+        def add_flow_card(
+            icon_char: Optional[str],
+            title_text: str,
+            desc_text: str,
+            on_open,
+            on_csv,
+            on_template,
+            icon_path: Optional[Path] = None,
+        ):
+            """開く / エクセル吸い込み / テンプレート出力 の3ボタン付きカード"""
+            card = tk.Frame(content, bg=card_bg, padx=card_pad, pady=card_pad,
+                            highlightbackground="#e0e7ef", highlightthickness=1)
+            card.pack(fill=tk.X, pady=6, padx=24)
+            if icon_path is not None and icon_path.exists():
+                try:
+                    photo = tk.PhotoImage(file=str(icon_path))
+                    self._card_icons.append(photo)
+                    tk.Label(card, image=photo, bg=card_bg).pack(side=tk.LEFT, padx=(0, 14), pady=4)
+                except Exception:
+                    if icon_char:
+                        tk.Label(card, text=icon_char, font=(_df, 22), bg=card_bg, fg="#3949ab").pack(side=tk.LEFT, padx=(0, 14), pady=4)
+            elif icon_char:
+                tk.Label(card, text=icon_char, font=(_df, 22), bg=card_bg, fg="#3949ab").pack(side=tk.LEFT, padx=(0, 14), pady=4)
+            text_frame = tk.Frame(card, bg=card_bg)
+            text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            tk.Label(text_frame, text=title_text, font=(_df, 11, "bold"), bg=card_bg, fg="#263238").pack(anchor=tk.W)
+            tk.Label(text_frame, text=desc_text, font=(_df, 9), bg=card_bg, fg="#78909c").pack(anchor=tk.W)
+            btn_row = tk.Frame(card, bg=card_bg)
+            btn_row.pack(side=tk.RIGHT, padx=(4, 0))
+            tk.Button(
+                btn_row, text="開く", font=(_df, 10), bg=btn_primary_bg, fg=btn_primary_fg,
+                activebackground="#303f9f", activeforeground="#ffffff", relief=tk.FLAT,
+                padx=12, pady=8, cursor="hand2", command=on_open,
+            ).pack(side=tk.LEFT, padx=2)
+            tk.Button(
+                btn_row, text="エクセル吸い込み", font=(_df, 9), bg=btn_secondary_bg, fg=btn_secondary_fg,
+                activebackground="#cfd8dc", relief=tk.FLAT,
+                padx=8, pady=8, cursor="hand2", highlightbackground=btn_secondary_bd, highlightthickness=1,
+                command=on_csv,
+            ).pack(side=tk.LEFT, padx=2)
+            tk.Button(
+                btn_row, text="テンプレート出力", font=(_df, 9), bg=btn_secondary_bg, fg=btn_secondary_fg,
+                activebackground="#cfd8dc", relief=tk.FLAT,
+                padx=8, pady=8, cursor="hand2", highlightbackground=btn_secondary_bd, highlightthickness=1,
+                command=on_template,
+            ).pack(side=tk.LEFT, padx=2)
         
         _ai_et_icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "icons" / "ai_et_icon.png"
-        add_card("\U0001f489", "AI/ET入力", "人工授精・胚移植の入力を行います", self._on_ai_et_input, icon_path=_ai_et_icon_path)
-        add_card("\U0001f404", "分娩入力", "分娩イベントの入力を行います", self._on_calving_input)
-        add_card("\U0001f4e5", "導入", "新規個体の導入登録を行います", self._on_introduction)
-        add_card("\U0001f6aa", "退出", "売却・死亡廃用の入力を行います", self._on_exit)
+        add_flow_card(
+            "\U0001f489", "AI/ET入力", "人工授精・胚移植の入力を行います",
+            self._on_ai_et_input, self._on_ai_et_csv_import, self._on_ai_et_template_export,
+            icon_path=_ai_et_icon_path,
+        )
+        add_flow_card(
+            "\U0001f404", "分娩入力", "分娩イベントの入力を行います",
+            self._on_calving_input, self._on_calving_csv_import, self._on_calving_template_export,
+        )
+        add_flow_card(
+            "\U0001f4e5", "導入", "新規個体の導入登録を行います",
+            self._on_introduction, self._on_introduction_csv_import, self._on_introduction_template_export,
+        )
+        add_flow_card(
+            "\U0001f6aa", "退出", "売却・死亡廃用の入力を行います",
+            self._on_exit, self._on_exit_csv_import, self._on_exit_template_export,
+        )
         add_card("\U0001fa7a", "検診入力", "繁殖検診の入力を行います", self._on_checkup_input)
         add_card("\U0001f4ca", "レポート出力", "レポートを出力します", self._on_report_output)
         add_card("\U0001f4cb", "検診表出力", "繁殖検診表を出力します", self._on_checkup_table_output)
@@ -256,6 +318,107 @@ class ReproductionCheckupFlowWindow:
             allowed_event_numbers=[RuleEngine.EVENT_SOLD, RuleEngine.EVENT_DEAD]  # 売却(205)または死廃(206)のみ
         )
         event_input_window.show()
+
+    def _on_ai_et_csv_import(self):
+        """AI/ET エクセル吸い込み"""
+        from ui.ai_import_window import AIImportWindow
+
+        w = AIImportWindow(self.window, self.db, self.rule_engine, self.farm_path)
+        w.show()
+
+    def _on_ai_et_template_export(self):
+        from modules.reproduction_flow_templates import write_ai_et_template
+
+        path = filedialog.asksaveasfilename(
+            parent=self.window,
+            title="AI/ET テンプレートの保存先",
+            defaultextension=".xlsx",
+            filetypes=[("Excel（推奨）", "*.xlsx"), ("CSV", "*.csv"), ("すべて", "*.*")],
+            initialfile="繁殖検診_AI_ETテンプレート.xlsx",
+        )
+        if not path:
+            return
+        try:
+            write_ai_et_template(Path(path))
+            messagebox.showinfo("完了", f"テンプレートを保存しました:\n{path}")
+        except Exception as e:
+            logging.error(f"テンプレート出力: {e}", exc_info=True)
+            messagebox.showerror("エラー", str(e))
+
+    def _on_calving_csv_import(self):
+        from ui.calving_import_window import CalvingImportWindow
+
+        w = CalvingImportWindow(self.window, self.db, self.rule_engine, self.farm_path)
+        w.show()
+
+    def _on_calving_template_export(self):
+        from modules.reproduction_flow_templates import write_calving_template
+
+        path = filedialog.asksaveasfilename(
+            parent=self.window,
+            title="分娩テンプレートの保存先",
+            defaultextension=".xlsx",
+            filetypes=[("Excel（推奨）", "*.xlsx"), ("CSV", "*.csv"), ("すべて", "*.*")],
+            initialfile="繁殖検診_分娩テンプレート.xlsx",
+        )
+        if not path:
+            return
+        try:
+            write_calving_template(Path(path))
+            messagebox.showinfo("完了", f"テンプレートを保存しました:\n{path}")
+        except Exception as e:
+            logging.error(f"テンプレート出力: {e}", exc_info=True)
+            messagebox.showerror("エラー", str(e))
+
+    def _on_introduction_csv_import(self):
+        from ui.introduction_bulk_import_window import IntroductionBulkImportWindow
+
+        w = IntroductionBulkImportWindow(self.window, self.db, self.rule_engine, self.farm_path)
+        w.show()
+
+    def _on_introduction_template_export(self):
+        from modules.reproduction_flow_templates import write_introduction_template
+
+        path = filedialog.asksaveasfilename(
+            parent=self.window,
+            title="導入テンプレートの保存先",
+            defaultextension=".xlsx",
+            filetypes=[("Excel（推奨）", "*.xlsx"), ("CSV", "*.csv"), ("すべて", "*.*")],
+            initialfile="繁殖検診_導入テンプレート.xlsx",
+        )
+        if not path:
+            return
+        try:
+            write_introduction_template(Path(path))
+            messagebox.showinfo("完了", f"テンプレートを保存しました:\n{path}")
+        except Exception as e:
+            logging.error(f"テンプレート出力: {e}", exc_info=True)
+            messagebox.showerror("エラー", str(e))
+
+    def _on_exit_csv_import(self):
+        from ui.exit_import_window import ExitImportWindow
+
+        w = ExitImportWindow(self.window, self.db, self.rule_engine, self.farm_path)
+        w.show()
+
+    def _on_exit_template_export(self):
+        from modules.reproduction_flow_templates import write_exit_template
+
+        path = filedialog.asksaveasfilename(
+            parent=self.window,
+            title="退出テンプレートの保存先",
+            defaultextension=".xlsx",
+            filetypes=[("Excel（推奨）", "*.xlsx"), ("CSV", "*.csv"), ("すべて", "*.*")],
+            initialfile="繁殖検診_退出テンプレート.xlsx",
+        )
+        if not path:
+            return
+        try:
+            write_exit_template(Path(path))
+            messagebox.showinfo("完了", f"テンプレートを保存しました:\n{path}")
+        except Exception as e:
+            logging.error(f"テンプレート出力: {e}", exc_info=True)
+            messagebox.showerror("エラー", str(e))
     
     def _on_checkup_input(self):
         """検診入力ボタンをクリック"""
@@ -339,65 +502,102 @@ class ReproductionCheckupFlowWindow:
         """レポート出力ボタンをクリック → レポート/請求選択ダイアログを表示"""
         from datetime import datetime
         from ui.date_picker_window import DatePickerWindow
-        
+
         _df = "Meiryo UI"
         bg = "#f5f5f5"
+        card_bg = "#ffffff"
+        sep_fg = "#e0e7ef"
         btn_primary_bg = "#3949ab"
         btn_primary_fg = "#ffffff"
         btn_secondary_bg = "#fafafa"
         btn_secondary_fg = "#546e7a"
         btn_secondary_bd = "#b0bec5"
-        
+        label_section = "#607d8b"
+
         dialog = tk.Toplevel(self.window)
         dialog.title("レポート出力")
-        dialog.geometry("440x380")
+        dialog.geometry("480x640")
         dialog.configure(bg=bg)
-        dialog.minsize(400, 300)
-        
-        # ヘッダー（イメージ統一）
-        header = tk.Frame(dialog, bg=bg, pady=20, padx=24)
+        dialog.minsize(440, 560)
+
+        # ヘッダー
+        header = tk.Frame(dialog, bg=bg, pady=16, padx=24)
         header.pack(fill=tk.X)
         tk.Label(header, text="\U0001f4ca", font=(_df, 24), bg=bg, fg="#3949ab").pack(side=tk.LEFT, padx=(0, 10))
         title_frame = tk.Frame(header, bg=bg)
         title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Label(title_frame, text="レポート出力", font=(_df, 16, "bold"), bg=bg, fg="#263238").pack(anchor=tk.W)
         tk.Label(title_frame, text="出力する種類を選択し、検診日を設定してください", font=(_df, 10), bg=bg, fg="#607d8b").pack(anchor=tk.W)
-        
-        # コンテンツ: チェックボックス + 検診日
-        content = tk.Frame(dialog, bg=bg, padx=24, pady=16)
-        content.pack(fill=tk.BOTH, expand=True)
-        
-        report_var = tk.BooleanVar(value=True)
-        billing_var = tk.BooleanVar(value=True)
-        log_var = tk.BooleanVar(value=False)
-        
-        report_cb = tk.Checkbutton(
-            content, text="レポート", variable=report_var,
-            font=(_df, 11), bg=bg, fg="#263238", activebackground=bg, activeforeground="#263238",
-            selectcolor="#e8eaf6", highlightthickness=0
-        )
-        report_cb.pack(anchor=tk.W, pady=(0, 12))
-        billing_cb = tk.Checkbutton(
-            content, text="請求", variable=billing_var,
-            font=(_df, 11), bg=bg, fg="#263238", activebackground=bg, activeforeground="#263238",
-            selectcolor="#e8eaf6", highlightthickness=0
-        )
-        billing_cb.pack(anchor=tk.W, pady=(0, 12))
-        log_cb = tk.Checkbutton(
-            content, text="検診ログ", variable=log_var,
-            font=(_df, 11), bg=bg, fg="#263238", activebackground=bg, activeforeground="#263238",
-            selectcolor="#e8eaf6", highlightthickness=0
-        )
-        log_cb.pack(anchor=tk.W, pady=(0, 16))
-        
-        # 検診日
-        date_label = tk.Label(content, text="検診日", font=(_df, 11), bg=bg, fg="#263238")
-        date_label.pack(anchor=tk.W, pady=(0, 4))
+
+        # スクロール可能なコンテンツエリア
+        scroll_frame = tk.Frame(dialog, bg=bg)
+        scroll_frame.pack(fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(scroll_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas_d = tk.Canvas(scroll_frame, bg=bg, highlightthickness=0, yscrollcommand=scrollbar.set)
+        canvas_d.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=canvas_d.yview)
+        content = tk.Frame(canvas_d, bg=bg, padx=24, pady=8)
+        canvas_window_d = canvas_d.create_window(0, 0, window=content, anchor=tk.NW)
+        def _on_content_cfg(_e):
+            canvas_d.configure(scrollregion=canvas_d.bbox("all"))
+        def _on_canvas_cfg(e):
+            canvas_d.itemconfig(canvas_window_d, width=e.width)
+        def _on_mousewheel(event):
+            try:
+                if event.delta:
+                    canvas_d.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                elif getattr(event, "num", None) == 4:
+                    canvas_d.yview_scroll(-1, "units")
+                elif getattr(event, "num", None) == 5:
+                    canvas_d.yview_scroll(1, "units")
+            except Exception:
+                pass
+        def _bind_mousewheel_recursive(widget):
+            widget.bind("<MouseWheel>", _on_mousewheel)
+            widget.bind("<Button-4>", _on_mousewheel)
+            widget.bind("<Button-5>", _on_mousewheel)
+            for child in widget.winfo_children():
+                _bind_mousewheel_recursive(child)
+        content.bind("<Configure>", _on_content_cfg)
+        canvas_d.bind("<Configure>", _on_canvas_cfg)
+        dialog.bind("<MouseWheel>", _on_mousewheel)
+        dialog.bind("<Button-4>", _on_mousewheel)
+        dialog.bind("<Button-5>", _on_mousewheel)
+        canvas_d.bind("<MouseWheel>", _on_mousewheel)
+        canvas_d.bind("<Button-4>", _on_mousewheel)
+        canvas_d.bind("<Button-5>", _on_mousewheel)
+        content.bind("<MouseWheel>", _on_mousewheel)
+        content.bind("<Button-4>", _on_mousewheel)
+        content.bind("<Button-5>", _on_mousewheel)
+
+        def _section_label(text: str):
+            tk.Label(
+                content, text=text, font=(_df, 10, "bold"),
+                bg=bg, fg="#3949ab"
+            ).pack(anchor=tk.W, pady=(14, 4))
+
+        def _make_cb(parent, text: str, var: tk.BooleanVar, desc: str = ""):
+            row = tk.Frame(parent, bg=bg)
+            row.pack(fill=tk.X, pady=(0, 6))
+            cb = tk.Checkbutton(
+                row, text=text, variable=var,
+                font=(_df, 11), bg=bg, fg="#263238",
+                activebackground=bg, activeforeground="#263238",
+                selectcolor="#e8eaf6", highlightthickness=0,
+            )
+            cb.pack(anchor=tk.W)
+            if desc:
+                tk.Label(row, text=f"  {desc}", font=(_df, 9), bg=bg, fg="#90a4ae").pack(anchor=tk.W)
+
+        # ── 検診日 ───────────────────────────────────────────────
+        _section_label("■ 検診日")
         date_frame = tk.Frame(content, bg=bg)
-        date_frame.pack(fill=tk.X)
+        date_frame.pack(anchor=tk.W, pady=(0, 4))
         date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
         date_entry = tk.Entry(date_frame, textvariable=date_var, font=(_df, 11), width=12)
         date_entry.pack(side=tk.LEFT, padx=(0, 8))
+
         def _on_calendar():
             def on_date_selected(date_str: str):
                 date_var.set(date_str)
@@ -408,19 +608,83 @@ class ReproductionCheckupFlowWindow:
                 initial = datetime.now().strftime("%Y-%m-%d")
             picker = DatePickerWindow(parent=dialog, initial_date=initial, on_date_selected=on_date_selected)
             picker.show()
+
         tk.Button(
             date_frame, text="📅", font=(_df, 10), width=3,
             bg=btn_secondary_bg, fg=btn_secondary_fg, relief=tk.FLAT,
             highlightbackground=btn_secondary_bd, highlightthickness=1,
-            cursor="hand2", command=_on_calendar
+            cursor="hand2", command=_on_calendar,
         ).pack(side=tk.LEFT)
-        
+
+        # ── ID / TAG 表示オプション ──────────────────────────────
+        _section_label("■ 管理番号の表示")
+        id_label_var = tk.StringVar(value="ID")
+        opt_frame = tk.Frame(content, bg=bg)
+        opt_frame.pack(anchor=tk.W, pady=(0, 8))
+        tk.Radiobutton(
+            opt_frame, text="ID（拡大4桁）", variable=id_label_var, value="ID",
+            font=(_df, 11), bg=bg, fg="#263238",
+            activebackground=bg, selectcolor="#e8eaf6", highlightthickness=0,
+        ).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Radiobutton(
+            opt_frame, text="TAG（耳標番号）", variable=id_label_var, value="TAG",
+            font=(_df, 11), bg=bg, fg="#263238",
+            activebackground=bg, selectcolor="#e8eaf6", highlightthickness=0,
+        ).pack(side=tk.LEFT)
+        tk.Label(content, text="  ※ 発情周期表・発情カレンダー・分娩予定表・分娩予定カレンダーの列ヘッダーに反映されます",
+                 font=(_df, 9), bg=bg, fg="#90a4ae").pack(anchor=tk.W, pady=(0, 10))
+
+        # ── 既存レポート群 ──────────────────────────────────────
+        _section_label("■ 繁殖検診レポート")
+        report_var = tk.BooleanVar(value=True)
+        billing_var = tk.BooleanVar(value=True)
+        log_var = tk.BooleanVar(value=False)
+        _make_cb(content, "繁殖レポート", report_var, "牛群繁殖指標・サマリーを出力")
+        _make_cb(content, "請求", billing_var, "獣医師請求書を出力")
+        _make_cb(content, "検診ログ", log_var, "直近4ヶ月分の検診ログを出力")
+
+        # ── 発情関連 ────────────────────────────────────────────
+        _section_label("■ 発情予測レポート")
+        estrus_table_var = tk.BooleanVar(value=False)
+        estrus_cal_var = tk.BooleanVar(value=False)
+        _make_cb(content, "発情周期表", estrus_table_var,
+                 "ID・JPN10・産次・DIM・最終AI日・21日後・42日後の一覧表")
+        _make_cb(content, "発情カレンダー", estrus_cal_var,
+                 "発情予測日・発情注意日をカレンダー形式で表示")
+
+        # ── 分娩予定 ─────────────────────────────────────────────
+        _section_label("■ 分娩予定レポート")
+        calving_table_var = tk.BooleanVar(value=False)
+        calving_cal_var = tk.BooleanVar(value=False)
+        _make_cb(content, "分娩予定表", calving_table_var,
+                 "受胎AI日・分娩予定日・SIRE・性別・双子の一覧表")
+        _make_cb(content, "分娩予定カレンダー", calving_cal_var,
+                 "分娩予定日をカレンダー形式で表示（多頭数対応）")
+
+        # ── カレンダー始まり曜日 ─────────────────────────────────
+        _section_label("■ カレンダーの週始まり")
+        week_start_var = tk.StringVar(value="sunday")
+        ws_frame = tk.Frame(content, bg=bg)
+        ws_frame.pack(anchor=tk.W, pady=(0, 4))
+        tk.Radiobutton(
+            ws_frame, text="日曜始まり（紙カレンダー標準）", variable=week_start_var, value="sunday",
+            font=(_df, 11), bg=bg, fg="#263238",
+            activebackground=bg, selectcolor="#e8eaf6", highlightthickness=0,
+        ).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Radiobutton(
+            ws_frame, text="月曜始まり（ISO標準）", variable=week_start_var, value="monday",
+            font=(_df, 11), bg=bg, fg="#263238",
+            activebackground=bg, selectcolor="#e8eaf6", highlightthickness=0,
+        ).pack(side=tk.LEFT)
+        tk.Label(content, text="  ※ 発情カレンダー・分娩予定カレンダーに適用されます",
+                 font=(_df, 9), bg=bg, fg="#90a4ae").pack(anchor=tk.W, pady=(0, 10))
+
         # フッター: OK / キャンセル
-        footer = tk.Frame(dialog, bg=bg, pady=20)
+        footer = tk.Frame(dialog, bg=bg, pady=16)
         footer.pack(fill=tk.X)
         btn_frame = tk.Frame(footer, bg=bg)
         btn_frame.pack()
-        
+
         def _on_ok():
             date_str = date_var.get().strip()
             try:
@@ -428,42 +692,81 @@ class ReproductionCheckupFlowWindow:
             except ValueError:
                 messagebox.showerror("エラー", "検診日の形式が正しくありません（YYYY-MM-DD形式）。")
                 return
+            any_checked = any([
+                report_var.get(), billing_var.get(), log_var.get(),
+                estrus_table_var.get(), estrus_cal_var.get(),
+                calving_table_var.get(), calving_cal_var.get(),
+            ])
+            if not any_checked:
+                messagebox.showinfo("情報", "出力するレポートを1つ以上選択してください。")
+                return
             dialog.destroy()
-            self._on_report_output_confirmed(report_var.get(), billing_var.get(), log_var.get(), date_str)
-        
+            self._on_report_output_confirmed(
+                report_checked=report_var.get(),
+                billing_checked=billing_var.get(),
+                log_checked=log_var.get(),
+                estrus_table_checked=estrus_table_var.get(),
+                estrus_cal_checked=estrus_cal_var.get(),
+                calving_table_checked=calving_table_var.get(),
+                calving_cal_checked=calving_cal_var.get(),
+                checkup_date=date_str,
+                id_label=id_label_var.get(),
+                week_start=week_start_var.get(),
+            )
+
         def _on_cancel():
             dialog.destroy()
-        
+
         tk.Button(
             btn_frame, text="OK", font=(_df, 10),
             bg=btn_primary_bg, fg=btn_primary_fg,
             activebackground="#303f9f", activeforeground="#ffffff", relief=tk.FLAT,
-            padx=24, pady=10, cursor="hand2", command=_on_ok
+            padx=24, pady=10, cursor="hand2", command=_on_ok,
         ).pack(side=tk.LEFT, padx=6)
         tk.Button(
             btn_frame, text="キャンセル", font=(_df, 10),
             bg=btn_secondary_bg, fg=btn_secondary_fg,
             activebackground="#eceff1", relief=tk.FLAT,
             padx=24, pady=10, highlightbackground=btn_secondary_bd, highlightthickness=1,
-            cursor="hand2", command=_on_cancel
+            cursor="hand2", command=_on_cancel,
         ).pack(side=tk.LEFT, padx=6)
-        
+
+        # ダイアログ内のどのウィジェット上でもホイールスクロールを有効化
+        _bind_mousewheel_recursive(content)
+
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
         y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
         dialog.geometry(f"+{x}+{y}")
     
-    def _on_report_output_confirmed(self, report_checked: bool, billing_checked: bool, log_checked: bool, checkup_date: str):
-        """レポート出力でOK押下後。請求HTML／レポートHTML／検診ログHTMLを出力する。"""
-        if not report_checked and not billing_checked and not log_checked:
-            messagebox.showinfo("情報", "レポート・請求・検診ログのいずれかにチェックを入れてください。")
-            return
+    def _on_report_output_confirmed(
+        self,
+        report_checked: bool,
+        billing_checked: bool,
+        log_checked: bool,
+        checkup_date: str,
+        estrus_table_checked: bool = False,
+        estrus_cal_checked: bool = False,
+        calving_table_checked: bool = False,
+        calving_cal_checked: bool = False,
+        id_label: str = "ID",
+        week_start: str = "sunday",
+    ):
+        """レポート出力でOK押下後。選択された各HTMLを出力する。"""
         if billing_checked:
             self._output_billing_html(checkup_date)
         if report_checked:
             self._output_report_html(checkup_date)
         if log_checked:
             self._output_exam_log_html()
+        if estrus_table_checked:
+            self._output_estrus_table_html(checkup_date, id_label)
+        if estrus_cal_checked:
+            self._output_estrus_calendar_html(checkup_date, id_label, week_start)
+        if calving_table_checked:
+            self._output_calving_plan_table_html(checkup_date, id_label)
+        if calving_cal_checked:
+            self._output_calving_plan_calendar_html(checkup_date, id_label, week_start)
 
     def _output_billing_html(self, checkup_date: str):
         """請求HTMLを生成し、既定ブラウザで表示する。"""
@@ -589,6 +892,108 @@ class ReproductionCheckupFlowWindow:
             "conception_rate": rate,
             "conception_denom": total_keisan,
         }
+
+    def _output_estrus_table_html(self, checkup_date: str, id_label: str = "ID"):
+        """発情周期表HTMLを生成しブラウザで表示。"""
+        from modules.estrus_calving_report import build_estrus_table_html
+        from settings_manager import SettingsManager
+        farm_name = SettingsManager(self.farm_path).get("farm_name", self.farm_path.name)
+        try:
+            html_content = build_estrus_table_html(
+                db=self.db,
+                rule_engine=self.rule_engine,
+                farm_path=self.farm_path,
+                checkup_date=checkup_date,
+                farm_name=farm_name,
+                id_label=id_label,
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", f"発情周期表の生成に失敗しました。\n{e}")
+            return
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".html", delete=False) as f:
+                f.write(html_content)
+                temp_path = f.name
+            webbrowser.open(f"file://{temp_path}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"発情周期表の表示に失敗しました。\n{e}")
+
+    def _output_estrus_calendar_html(self, checkup_date: str, id_label: str = "ID", week_start: str = "sunday"):
+        """発情カレンダーHTMLを生成しブラウザで表示。"""
+        from modules.estrus_calving_report import build_estrus_calendar_html
+        from settings_manager import SettingsManager
+        farm_name = SettingsManager(self.farm_path).get("farm_name", self.farm_path.name)
+        try:
+            html_content = build_estrus_calendar_html(
+                db=self.db,
+                rule_engine=self.rule_engine,
+                farm_path=self.farm_path,
+                checkup_date=checkup_date,
+                farm_name=farm_name,
+                id_label=id_label,
+                week_start=week_start,
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", f"発情カレンダーの生成に失敗しました。\n{e}")
+            return
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".html", delete=False) as f:
+                f.write(html_content)
+                temp_path = f.name
+            webbrowser.open(f"file://{temp_path}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"発情カレンダーの表示に失敗しました。\n{e}")
+
+    def _output_calving_plan_table_html(self, checkup_date: str, id_label: str = "ID"):
+        """分娩予定表HTMLを生成しブラウザで表示。"""
+        from modules.estrus_calving_report import build_calving_plan_table_html
+        from settings_manager import SettingsManager
+        farm_name = SettingsManager(self.farm_path).get("farm_name", self.farm_path.name)
+        try:
+            html_content = build_calving_plan_table_html(
+                db=self.db,
+                rule_engine=self.rule_engine,
+                farm_path=self.farm_path,
+                checkup_date=checkup_date,
+                farm_name=farm_name,
+                id_label=id_label,
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", f"分娩予定表の生成に失敗しました。\n{e}")
+            return
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".html", delete=False) as f:
+                f.write(html_content)
+                temp_path = f.name
+            webbrowser.open(f"file://{temp_path}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"分娩予定表の表示に失敗しました。\n{e}")
+
+    def _output_calving_plan_calendar_html(self, checkup_date: str, id_label: str = "ID", week_start: str = "sunday"):
+        """分娩予定カレンダーHTMLを生成しブラウザで表示。"""
+        from modules.estrus_calving_report import build_calving_plan_calendar_html
+        from settings_manager import SettingsManager
+        farm_name = SettingsManager(self.farm_path).get("farm_name", self.farm_path.name)
+        try:
+            html_content = build_calving_plan_calendar_html(
+                db=self.db,
+                rule_engine=self.rule_engine,
+                farm_path=self.farm_path,
+                checkup_date=checkup_date,
+                farm_name=farm_name,
+                id_label=id_label,
+                week_start=week_start,
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", f"分娩予定カレンダーの生成に失敗しました。\n{e}")
+            return
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".html", delete=False) as f:
+                f.write(html_content)
+                temp_path = f.name
+            webbrowser.open(f"file://{temp_path}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"分娩予定カレンダーの表示に失敗しました。\n{e}")
 
     def _output_exam_log_html(self):
         """検診ログ（直近4か月分）をHTMLで生成し、ブラウザで表示する。"""

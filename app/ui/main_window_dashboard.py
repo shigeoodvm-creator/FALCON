@@ -154,10 +154,11 @@ def _build_inline_scatter(points, chart_id, title, x_label, y_label, x_key, y_ke
         cy = py(yi)
         fill = color_fn(p) if color_fn else "#1565C0"
         cow_id = p.get("cow_id", "")
+        y_display = p.get("y_label", p.get(y_key, ""))
         svg_parts.append(
             f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="{fill}" opacity="0.72" '
             f'stroke="white" stroke-width="0.8" '
-            f'data-cow="{cow_id}" data-xv="{p.get(x_key,"")}" data-yv="{p.get(y_key,"")}" '
+            f'data-cow="{cow_id}" data-xv="{p.get(x_key,"")}" data-yv="{y_display}" '
             f'style="cursor:pointer" class="{chart_id}_dot"/>'
         )
 
@@ -434,7 +435,13 @@ class DashboardMixin:
                     herd_dynamics_data = build_herd_dynamics_data(self.db, self.formula_engine, self.farm_path)
                 except Exception as e:
                     logging.debug(f"ダッシュボード: 牛群動態データ取得スキップ: {e}")
-            
+
+            # BHB高値牛・乳量低下牛アラート
+            milk_alerts = self._calculate_dashboard_milk_alerts()
+
+            # 乳検月次トレンドHTML（12ヶ月）
+            milk_trend_html = self._calculate_dashboard_milk_trend()
+
             # HTML生成
             html_content = self._build_dashboard_html(
                 farm_name,
@@ -457,6 +464,8 @@ class DashboardMixin:
                 ai_et_conception_stats=ai_et_conception_stats,
                 first_ai_scatter=first_ai_scatter,
                 rc_dim_scatter=rc_dim_scatter,
+                milk_alerts=milk_alerts,
+                milk_trend_html=milk_trend_html,
             )
             
             # 一時HTMLファイルを作成
@@ -478,6 +487,9 @@ class DashboardMixin:
         if not all_events:
             return {
                 "avg_milk": None,
+                "max_milk": None,
+                "min_milk": None,
+                "median_milk": None,
                 "avg_first_parity": None,
                 "avg_multiparous": None,
                 "latest_date": None,
@@ -491,6 +503,9 @@ class DashboardMixin:
         if not latest_milk_test_date:
             return {
                 "avg_milk": None,
+                "max_milk": None,
+                "min_milk": None,
+                "median_milk": None,
                 "avg_first_parity": None,
                 "avg_multiparous": None,
                 "latest_date": None,
@@ -553,6 +568,11 @@ class DashboardMixin:
         avg_milk = sum(milk_yields) / len(milk_yields) if milk_yields else None
         avg_first_parity = sum(first_parity_milk_yields) / len(first_parity_milk_yields) if first_parity_milk_yields else None
         avg_multiparous = sum(multiparous_milk_yields) / len(multiparous_milk_yields) if multiparous_milk_yields else None
+        max_milk = max(milk_yields) if milk_yields else None
+        min_milk = min(milk_yields) if milk_yields else None
+        _sy = sorted(milk_yields)
+        _n = len(_sy)
+        median_milk = (_sy[_n // 2] if _n % 2 == 1 else (_sy[_n // 2 - 1] + _sy[_n // 2]) / 2) if _n else None
         
         # 乳量階層を計算（~20kg, 20kg台, 30kg台, 40kg台, ~50kg）
         milk_bins = {
@@ -577,13 +597,160 @@ class DashboardMixin:
         
         return {
             "avg_milk": avg_milk,
+            "max_milk": max_milk,
+            "min_milk": min_milk,
+            "median_milk": median_milk,
             "avg_first_parity": avg_first_parity,
             "avg_multiparous": avg_multiparous,
             "latest_date": latest_milk_test_date,
             "milk_bins": milk_bins,
             "milk_yields": milk_yields
         }
-    
+
+    def _calculate_dashboard_milk_alerts(self):
+        """BHB高値牛（>=0.13）と乳量15%以上低下牛を計算（最新2乳検日ベース）"""
+        all_events = self.db.get_events_by_number(601, include_deleted=False)
+        if not all_events:
+            return {"bhb_rows": [], "milk_drop_rows": [], "latest_date": None}
+        dates = sorted({e.get("event_date") for e in all_events if e.get("event_date")}, reverse=True)
+        if not dates:
+            return {"bhb_rows": [], "milk_drop_rows": [], "latest_date": None}
+        latest_date = dates[0]
+        prev_date = dates[1] if len(dates) > 1 else None
+
+        # 前月乳量を牛ごとに収集
+        prev_milk_by_cow: Dict[int, float] = {}
+        if prev_date:
+            for e in all_events:
+                if e.get("event_date") != prev_date:
+                    continue
+                cid = e.get("cow_auto_id")
+                if not cid:
+                    continue
+                j = e.get("json_data") or {}
+                if isinstance(j, str):
+                    try:
+                        j = json.loads(j)
+                    except Exception:
+                        j = {}
+                mv = j.get("milk_yield") or j.get("milk_kg")
+                try:
+                    mv = float(mv) if mv not in (None, "") else None
+                except (ValueError, TypeError):
+                    mv = None
+                if mv:
+                    prev_milk_by_cow[cid] = mv
+
+        # 最新乳検日の全分娩イベントを一括取得してDIM計算用にキャッシュ
+        calv_events = self.db.get_events_by_number(RuleEngine.EVENT_CALV, include_deleted=False)
+        last_calv_by_cow: Dict[int, str] = {}
+        for ce in calv_events:
+            cid = ce.get("cow_auto_id")
+            cd = ce.get("event_date")
+            if not cid or not cd:
+                continue
+            if cd <= latest_date:
+                if cid not in last_calv_by_cow or cd > last_calv_by_cow[cid]:
+                    last_calv_by_cow[cid] = cd
+
+        bhb_rows: List[Dict] = []
+        milk_drop_rows: List[Dict] = []
+
+        for event in all_events:
+            if event.get("event_date") != latest_date:
+                continue
+            cow_auto_id = event.get("cow_auto_id")
+            if not cow_auto_id:
+                continue
+            if self._is_cow_disposed_for_dashboard(cow_auto_id):
+                continue
+            cow = self.db.get_cow_by_auto_id(cow_auto_id)
+            if not cow:
+                continue
+            lact = cow.get("lact")
+            try:
+                lact = int(lact) if lact is not None else None
+            except (ValueError, TypeError):
+                lact = None
+            if lact is None or lact < 1:
+                continue
+
+            j = event.get("json_data") or {}
+            if isinstance(j, str):
+                try:
+                    j = json.loads(j)
+                except Exception:
+                    j = {}
+
+            def _fv(v):
+                return str(v) if v not in (None, "") else "-"
+
+            milk_v = j.get("milk_yield") or j.get("milk_kg")
+            try:
+                milk_num = float(milk_v) if milk_v not in (None, "") else None
+            except (ValueError, TypeError):
+                milk_num = None
+
+            bhb_v = j.get("bhb")
+            try:
+                bhb_num = float(bhb_v) if bhb_v not in (None, "") else None
+            except (ValueError, TypeError):
+                bhb_num = None
+
+            scc_v = j.get("scc")
+            try:
+                scc_num = float(scc_v) if scc_v not in (None, "") else None
+            except (ValueError, TypeError):
+                scc_num = None
+
+            last_calv = last_calv_by_cow.get(cow_auto_id)
+            dim = None
+            if last_calv:
+                try:
+                    cd_dt = datetime.strptime(last_calv, "%Y-%m-%d")
+                    ld_dt = datetime.strptime(latest_date, "%Y-%m-%d")
+                    dim = (ld_dt - cd_dt).days
+                except Exception:
+                    pass
+
+            prev_milk = prev_milk_by_cow.get(cow_auto_id)
+            row = {
+                "cow_id": _fv(cow.get("cow_id", "")),
+                "jpn10": _fv(cow.get("jpn10", "")),
+                "lact": _fv(lact),
+                "dim": _fv(dim),
+                "milk": f"{milk_num:.1f}" if milk_num is not None else "-",
+                "prev_milk": f"{prev_milk:.1f}" if prev_milk is not None else "-",
+                "scc": f"{scc_num:.0f}" if scc_num is not None else "-",
+                "bhb": f"{bhb_num:.3f}" if bhb_num is not None else "-",
+                "bhb_class": " bhb-alert" if bhb_num is not None and bhb_num >= 0.13 else "",
+                "scc_class": " scc-alert" if scc_num is not None and scc_num >= 200 else "",
+            }
+            if bhb_num is not None and bhb_num >= 0.13:
+                bhb_rows.append(row)
+            if milk_num is not None and prev_milk is not None and prev_milk > 0:
+                if milk_num <= prev_milk * 0.85:
+                    milk_drop_rows.append(dict(row))
+
+        bhb_rows.sort(key=lambda r: float(r["bhb"]) if r["bhb"] != "-" else 0, reverse=True)
+        return {"bhb_rows": bhb_rows, "milk_drop_rows": milk_drop_rows, "latest_date": latest_date}
+
+    def _calculate_dashboard_milk_trend(self):
+        """直近12ヶ月の乳検月次トレンドHTMLを生成"""
+        try:
+            from modules.milk_report_extras import compute_monthly_milk_trend, build_12month_trend_section_html
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            all_events = self.db.get_events_by_number(601, include_deleted=False)
+            if not all_events:
+                return ""
+            trend_rows = compute_monthly_milk_trend(all_events, today_str, 12)
+            if not trend_rows:
+                return ""
+            return build_12month_trend_section_html(trend_rows)
+        except Exception as e:
+            logging.debug(f"乳検トレンドHTML生成スキップ: {e}")
+            return ""
+
     def _filter_existing_cows(self, cow_rows: List) -> List:
         """
         現存牛のみをフィルタリング（集計・リスト・グラフコマンド用）
@@ -1096,6 +1263,8 @@ class DashboardMixin:
         from datetime import datetime
         today = datetime.now()
         points = []
+        rc_order = [1, 2, 4, 3, 5, 6]
+        rc_position = {rc: idx for idx, rc in enumerate(rc_order)}
         rc_labels = {1:"繁殖停止", 2:"Fresh", 3:"授精後", 4:"空胎", 5:"妊娠中", 6:"乾乳"}
         for cow in lactated_cows:
             clvd = cow.get("clvd") or ""
@@ -1110,12 +1279,15 @@ class DashboardMixin:
             if dim < 0:
                 continue
             rc = cow.get("rc", 4)
+            if rc not in rc_position:
+                continue
             lact = cow.get("lact", 1)
             points.append({
                 "cow_id": cow_id,
                 "auto_id": auto_id,
                 "x": dim,
-                "y": rc,
+                "y": rc_position[rc],
+                "y_label": f"{rc}: {rc_labels.get(rc, str(rc))}",
                 "rc_label": rc_labels.get(rc, str(rc)),
                 "lact": lact,
             })
@@ -1128,9 +1300,8 @@ class DashboardMixin:
             from modules.reproduction_analysis import ReproductionAnalysis
             today = datetime.now()
             end_date = today.strftime("%Y-%m-%d")
-            item_dict_path = Path(self.farm_path) / "config" / "item_dictionary.json"
-            if not item_dict_path.exists():
-                item_dict_path = Path(__file__).resolve().parent.parent.parent / "config_default" / "item_dictionary.json"
+            from constants import CONFIG_DEFAULT_DIR
+            item_dict_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
             from modules.formula_engine import FormulaEngine
             fe = FormulaEngine(self.db, item_dict_path)
             analyzer = ReproductionAnalysis(
@@ -1164,9 +1335,8 @@ class DashboardMixin:
             from modules.formula_engine import FormulaEngine
             today = datetime.now()
             end_date = today.strftime("%Y-%m-%d")
-            item_dict_path = Path(self.farm_path) / "config" / "item_dictionary.json"
-            if not item_dict_path.exists():
-                item_dict_path = Path(__file__).resolve().parent.parent.parent / "config_default" / "item_dictionary.json"
+            from constants import CONFIG_DEFAULT_DIR
+            item_dict_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
             fe = FormulaEngine(self.db, item_dict_path)
             analyzer = ReproductionAnalysis(
                 db=self.db, rule_engine=self.rule_engine,
@@ -1638,7 +1808,7 @@ class DashboardMixin:
   </div>
 </div>"""
 
-    def _build_dashboard_html(self, farm_name, parity_segments, avg_parity, total, milk_stats, fertility_stats, monthly_fertility_stats, herd_summary, scc_summary, scatter_data, insemination_count_fertility_stats, herd_dynamics_data=None, pr_hdr_data=None, repro_detail=None, heifer_monthly_fertility_stats=None, cumulative_pregnancy_data=None, dim_parity_breakdown=None, ai_et_conception_stats=None, first_ai_scatter=None, rc_dim_scatter=None):
+    def _build_dashboard_html(self, farm_name, parity_segments, avg_parity, total, milk_stats, fertility_stats, monthly_fertility_stats, herd_summary, scc_summary, scatter_data, insemination_count_fertility_stats, herd_dynamics_data=None, pr_hdr_data=None, repro_detail=None, heifer_monthly_fertility_stats=None, cumulative_pregnancy_data=None, dim_parity_breakdown=None, ai_et_conception_stats=None, first_ai_scatter=None, rc_dim_scatter=None, milk_alerts=None, milk_trend_html=""):
         """ダッシュボードのHTMLを生成"""
         # 乳量・リニアスコア散布図（乳検レポートと同じ仕様：Plotly、ホバーでID表示・2グラフ連動、x_min/x_max で DIM 軸を固定）
         scatter_plotly_html = ""
@@ -1906,7 +2076,7 @@ class DashboardMixin:
             
             milk_stats_html = f"""
             <div class="milk-section">
-                <div class="section-title">乳量要約（{milk_stats["latest_date"]}）</div>
+                <div class="section-title">乳量分布（直近乳検日 {milk_stats["latest_date"]}）</div>
                 <div class="milk-chart-container">
                     <div class="milk-donut">
                         {milk_donut_svg}
@@ -1996,7 +2166,7 @@ class DashboardMixin:
             
             fertility_table_html = f"""
             <div class="fertility-section">
-                <div class="section-title">産次ごとの受胎率（経産）</div>
+                <div class="section-title">受胎率（産次別・経産牛）</div>
                 <div class="subheader">{start_date} ～ {end_date}</div>
                 <table class="summary-table" style="width: 100%; max-width: 600px;">
                     <thead>
@@ -2105,7 +2275,7 @@ class DashboardMixin:
             
             monthly_fertility_table_html = f"""
             <div class="fertility-section">
-                <div class="section-title">月ごと受胎率（経産）</div>
+                <div class="section-title">受胎率（月次推移・経産牛）</div>
                 <div class="subheader">{start_date} ～ {end_date}</div>
                 <table class="summary-table" style="width: 100%; max-width: 600px;">
                     <thead>
@@ -2198,7 +2368,7 @@ class DashboardMixin:
             
             insemination_count_fertility_table_html = f"""
             <div class="fertility-section">
-                <div class="section-title">授精回数ごとの受胎率（経産）</div>
+                <div class="section-title">受胎率（授精回数別・経産牛）</div>
                 <div class="subheader">{start_date} ～ {end_date}</div>
                 <table class="summary-table" style="width: 100%; max-width: 600px;">
                     <thead>
@@ -2273,7 +2443,7 @@ class DashboardMixin:
             
             scc_summary_html = f"""
             <div class="scc-section">
-                <div class="section-title">体細胞要約（{scc_summary["latest_date"]}）</div>
+                <div class="section-title">体細胞スコア分布（直近乳検日 {scc_summary["latest_date"]}）</div>
                 <div class="milk-chart-container">
                     <div class="milk-donut">
                         {ls_donut_svg}
@@ -2329,7 +2499,7 @@ class DashboardMixin:
                 )
             heifer_monthly_table_html = f"""
             <div class="fertility-section">
-                <div class="section-title">未経産牛 月ごと受胎率</div>
+                <div class="section-title">受胎率（月次推移・未経産牛）</div>
                 <div class="subheader">{h_start} ～ {h_end}</div>
                 <table class="summary-table" style="width:100%;max-width:600px">
                     <thead><tr>
@@ -2540,7 +2710,7 @@ class DashboardMixin:
         )
 
         # 繁殖状態 × DIM 散布図
-        rc_labels_map = {1:"繁殖停止", 2:"Fresh", 3:"授精後", 4:"空胎", 5:"妊娠中", 6:"乾乳"}
+        rc_labels_map = {0:"繁殖停止", 1:"Fresh", 2:"空胎", 3:"授精後", 4:"妊娠中", 5:"乾乳"}
         rc_dim_scatter_html = _build_inline_scatter(
             points=rc_dim_scatter or [],
             chart_id="scatter_rc_dim",
@@ -2867,6 +3037,75 @@ class DashboardMixin:
             from modules.report_cow_bridge import DEFAULT_PORT as _report_open_cow_port
         except ImportError:
             _report_open_cow_port = 51985
+
+        # ─── アラートHTML（BHB高値牛・乳量低下牛）────────────────────────────
+        _milk_alerts = milk_alerts or {"bhb_rows": [], "milk_drop_rows": [], "latest_date": None}
+        _bhb_rows  = _milk_alerts.get("bhb_rows", [])
+        _drop_rows = _milk_alerts.get("milk_drop_rows", [])
+        _alert_date = _milk_alerts.get("latest_date") or ""
+
+        def _alert_tbl(rows, title, date_lbl):
+            if not rows:
+                return (f'<div class="section-title">{title}</div>'
+                        f'<p class="subnote" style="margin:6px 0 0">該当なし</p>')
+            trs = "".join(
+                f'<tr>'
+                f'<td class="num"><a href="#" class="report-cow-link" data-cow-id="{html.escape(str(r["cow_id"]))}">{html.escape(str(r["cow_id"]))}</a></td>'
+                f'<td class="num">{html.escape(str(r["lact"]))}</td>'
+                f'<td class="num">{html.escape(str(r["dim"]))}</td>'
+                f'<td class="num">{html.escape(str(r["milk"]))}</td>'
+                f'<td class="num">{html.escape(str(r["prev_milk"]))}</td>'
+                f'<td class="num{r.get("scc_class","")}">{html.escape(str(r["scc"]))}</td>'
+                f'<td class="num{r.get("bhb_class","")}">{html.escape(str(r["bhb"]))}</td>'
+                f'</tr>'
+                for r in rows
+            )
+            date_s = html.escape(str(date_lbl)) if date_lbl else ""
+            return (
+                f'<div class="section-title">{title}'
+                f'{"（" + date_s + "）" if date_s else ""}'
+                f'</div>'
+                f'<div class="subheader">{len(rows)}頭</div>'
+                f'<div style="overflow-x:auto">'
+                f'<table class="summary-table" style="width:100%;font-size:12px">'
+                f'<thead><tr><th>ID</th><th>産次</th><th>DIM</th>'
+                f'<th>今月<br>乳量</th><th>前月<br>乳量</th><th>SCC</th><th>BHB</th></tr></thead>'
+                f'<tbody>{trs}</tbody></table></div>'
+            )
+
+        bhb_alert_html  = _alert_tbl(_bhb_rows,  "BHB高値牛（≥0.13）",    _alert_date)
+        drop_alert_html = _alert_tbl(_drop_rows, "乳量15%以上低下牛", _alert_date)
+
+        # ─── 乳検トレンドCSS ────────────────────────────────────────────────
+        _trend_css = ""
+        try:
+            from modules.milk_report_extras import MILK_REPORT_COMMENT_CSS as _trcss
+            _trend_css = _trcss
+        except Exception:
+            pass
+
+        # ─── KPI カード値 ────────────────────────────────────────────────────
+        _kpi_total    = f"{total}頭"
+        _kpi_avg_milk = f"{milk_stats['avg_milk']:.1f}kg"  if milk_stats.get("avg_milk")            else "-"
+        _kpi_preg     = f"{herd_summary.get('pregnancy_rate',0):.1f}%" if herd_summary.get("pregnancy_rate") is not None else "-"
+        _kpi_pr21     = f"{pr_hdr_data['avg_pr']:.0f}%"   if pr_hdr_data and pr_hdr_data.get("avg_pr")  is not None else "-"
+        _kpi_avg_dim  = f"{herd_summary.get('avg_dim',0):.0f}日"       if herd_summary.get("avg_dim")  is not None else "-"
+        _kpi_conception = "-"
+        try:
+            if fertility_stats and fertility_stats.get("stats"):
+                _stats = fertility_stats.get("stats") or {}
+                _tot_conceived = sum((s or {}).get("conceived", 0) for s in _stats.values())
+                _tot_not_conceived = sum((s or {}).get("not_conceived", 0) for s in _stats.values())
+                _den = _tot_conceived + _tot_not_conceived
+                if _den > 0:
+                    _kpi_conception = f"{(_tot_conceived / _den) * 100:.1f}%"
+        except Exception:
+            _kpi_conception = "-"
+        _kpi_max_milk = f"{milk_stats['max_milk']:.1f}kg"  if milk_stats.get("max_milk")             else "-"
+        _kpi_min_milk = f"{milk_stats['min_milk']:.1f}kg"  if milk_stats.get("min_milk")             else "-"
+        _kpi_med_milk = f"{milk_stats['median_milk']:.1f}kg" if milk_stats.get("median_milk")        else "-"
+        _milk_date    = milk_stats.get("latest_date") or ""
+
         html_content = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -2896,11 +3135,17 @@ class DashboardMixin:
         }}
         .header {{
             font-size: 1.4rem;
-            font-weight: 600;
-            margin-bottom: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
             padding-bottom: 12px;
-            border-bottom: 2px solid #0d6efd;
-            color: #0d6efd;
+            border-bottom: 1px solid #e2e8f0;
+            color: #1e293b;
+        }}
+        .header-meta {{
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 24px;
+            letter-spacing: 0.02em;
         }}
         .dashboard-grid {{
             display: grid;
@@ -3034,12 +3279,20 @@ class DashboardMixin:
             margin-bottom: 0;
         }}
         .section-title {{
-            font-size: 1.1rem;
-            font-weight: 600;
-            padding-bottom: 4px;
-            border-bottom: 2px solid #0d6efd;
-            margin-bottom: 20px;
-            color: #0d6efd;
+            font-size: 13px;
+            font-weight: 700;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #e2e8f0;
+            margin-bottom: 16px;
+            color: #334155;
+            letter-spacing: 0.03em;
+            text-transform: none;
+        }}
+        .chart-period {{
+            font-size: 11px;
+            color: #94a3b8;
+            font-weight: 400;
+            margin-left: 6px;
         }}
         .parity-chart-container {{
             display: flex;
@@ -3215,11 +3468,12 @@ class DashboardMixin:
             text-align: left;
         }}
         .summary-table th {{
-            background: #e9ecef;
-            font-weight: 600;
+            background: #f1f5f9;
+            font-weight: 700;
             text-align: center;
-            font-size: 12px;
-            color: #495057;
+            font-size: 11px;
+            color: #475569;
+            letter-spacing: 0.03em;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
         }}
@@ -3228,11 +3482,18 @@ class DashboardMixin:
             font-variant-numeric: tabular-nums;
         }}
         .summary-table tbody tr:hover {{
-            background: #f8f9fa;
+            background: #eff6ff;
+        }}
+        .summary-table tbody tr:nth-child(even) {{
+            background: #f9fafb;
+        }}
+        .summary-table tbody tr:nth-child(even):hover {{
+            background: #eff6ff;
         }}
         .total-row {{
-            background: #f8f9fa;
-            font-weight: 600;
+            background: #f1f5f9 !important;
+            font-weight: 700;
+            border-top: 1px solid #cbd5e1;
         }}
         .subnote {{
             color: #6c757d;
@@ -3336,102 +3597,341 @@ class DashboardMixin:
                 margin: 0.5cm;
             }}
         }}
+        /* ── ナビゲーションバー ─────────────────────────────────────────── */
+        .dash-nav {{
+            position: sticky;
+            top: 0;
+            z-index: 200;
+            background: #fff;
+            border-bottom: 1px solid #dee2e6;
+            box-shadow: 0 2px 6px rgba(0,0,0,.08);
+            padding: 0 24px;
+        }}
+        .dash-nav .nav-inner {{
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            height: 46px;
+        }}
+        .dash-nav .nav-farm {{
+            font-weight: 700;
+            color: #1e293b;
+            font-size: 14px;
+            white-space: nowrap;
+            margin-right: 12px;
+        }}
+        .nav-buttons {{
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }}
+        .nav-btn {{
+            padding: 5px 16px;
+            border: 1px solid #dee2e6;
+            border-radius: 20px;
+            background: #fff;
+            color: #495057;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all .15s;
+            white-space: nowrap;
+        }}
+        .nav-btn:hover {{ background: #e9ecef; }}
+        .nav-btn.active {{
+            background: #1d4ed8;
+            color: #fff;
+            border-color: #1d4ed8;
+            font-weight: 600;
+        }}
+        /* ── セクション ────────────────────────────────────────────────── */
+        .dash-section {{
+            margin-top: 36px;
+            padding-top: 4px;
+        }}
+        .sec-label {{
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #1e293b;
+            border-left: 4px solid #1d4ed8;
+            padding-left: 12px;
+            margin-bottom: 20px;
+        }}
+        /* ── KPI カード ──────────────────────────────────────────────── */
+        .kpi-grid {{
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 14px;
+            margin-bottom: 24px;
+        }}
+        @media (max-width: 900px) {{
+            .kpi-grid {{ grid-template-columns: repeat(3, 1fr); }}
+        }}
+        .kpi-card {{
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 16px 16px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.04);
+            border-left: 4px solid #1d4ed8;
+        }}
+        .kpi-card.kpi-green  {{ border-left-color: #059669; }}
+        .kpi-card.kpi-orange {{ border-left-color: #d97706; }}
+        .kpi-card.kpi-purple {{ border-left-color: #7c3aed; }}
+        .kpi-card.kpi-teal   {{ border-left-color: #0891b2; }}
+        .kpi-card.kpi-red    {{ border-left-color: #dc2626; }}
+        .kpi-label {{
+            font-size: 11px;
+            color: #64748b;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+        }}
+        .kpi-value {{
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: #0f172a;
+            line-height: 1.0;
+            letter-spacing: -0.01em;
+        }}
+        .kpi-sub {{
+            font-size: 11px;
+            color: #94a3b8;
+        }}
+        /* ── 2/3カラムグリッド ───────────────────────────────────────���─ */
+        .two-col-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }}
+        .three-col-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 20px;
+        }}
+        /* ── アラートテーブル ─────────────────────────────────────────── */
+        .bhb-alert {{ background: #fff3cd !important; font-weight: 600; }}
+        .scc-alert {{ color: #dc3545; font-weight: 600; }}
+        /* ── 乳量統計バー ────────────────────────────────────────────── */
+        .milk-stat-row {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 0;
+            font-size: 13px;
+            border-bottom: 1px solid #f0f0f0;
+        }}
+        .milk-stat-row:last-child {{ border-bottom: none; }}
+        .milk-stat-lbl {{ color: #495057; }}
+        .milk-stat-val {{ font-weight: 700; color: #212529; }}
+        {_trend_css}
     </style>
     <script>var FALCON_OPEN_COW_PORT = {_report_open_cow_port};</script>
 </head>
 <body>
-    <div class="dashboard-container">
-        <div class="header">{html.escape(str(farm_name))}　ダッシュボード</div>
-        
-        <div class="dashboard-grid">
-            <div class="dashboard-item">
-        <div class="parity-section">
-                    <div class="section-title">牛群要約</div>
-            <div class="parity-chart-container">
-                <div class="parity-donut">
-                    {parity_donut_svg}
-                </div>
-                <div class="legend">
-                    {parity_legend}
-                </div>
-            </div>
-                    <div class="herd-summary-stats">
-                        {f'<div class="summary-stat-item"><span class="summary-stat-label">経産牛頭数:</span> <span class="summary-stat-value">{total}頭</span></div>' if total > 0 else '<div class="summary-stat-item"><span class="summary-stat-label">経産牛頭数:</span> <span class="summary-stat-value">-</span></div>'}
-                        {f'<div class="summary-stat-item"><span class="summary-stat-label">平均分娩後日数:</span> <span class="summary-stat-value">{herd_summary.get("avg_dim", 0):.1f}日</span></div>' if herd_summary.get("avg_dim") is not None else '<div class="summary-stat-item"><span class="summary-stat-label">平均分娩後日数:</span> <span class="summary-stat-value">-</span></div>'}
-                        {f'<div class="summary-stat-item"><span class="summary-stat-label">妊娠牛の割合:</span> <span class="summary-stat-value">{herd_summary.get("pregnancy_rate", 0):.1f}%</span></div>' if herd_summary.get("pregnancy_rate") is not None else '<div class="summary-stat-item"><span class="summary-stat-label">妊娠牛の割合:</span> <span class="summary-stat-value">-</span></div>'}
-                        {f'<div class="summary-stat-item"><span class="summary-stat-label">分娩間隔:</span> <span class="summary-stat-value">{herd_summary.get("avg_cci", 0):.1f}日</span></div>' if herd_summary.get("avg_cci") is not None else '<div class="summary-stat-item"><span class="summary-stat-label">分娩間隔:</span> <span class="summary-stat-value">-</span></div>'}
-                        {f'<div class="summary-stat-item"><span class="summary-stat-label">予定分娩間隔:</span> <span class="summary-stat-value">{herd_summary.get("avg_pcci", 0):.1f}日</span></div>' if herd_summary.get("avg_pcci") is not None else '<div class="summary-stat-item"><span class="summary-stat-label">予定分娩間隔:</span> <span class="summary-stat-value">-</span></div>'}
-                    </div>
-                </div>
-            </div>
-            
-            <div class="dashboard-item">
-            {milk_stats_html}
-        </div>
-        
-            <div class="dashboard-item">
-                {scc_summary_html}
-            </div>
-            
-            {scatter_plotly_html}
-            
-            <div class="herd-dynamics-row">
-                <div class="dashboard-item">
-                    <div class="herd-dynamics-section">
-                        {herd_dynamics_chart_html}
-                    </div>
-                </div>
-            </div>
-            
-            {f'''<div class="pr-detail-row">
-                <div class="dashboard-item">
-                    {pr_cycle_table_html}
-                </div>
-                <div class="dashboard-item pr-dim-card">
-                    {pr_dim_chart_html}
-                    {pregnancy_donut_html}
-                </div>
-            </div>''' if repro_detail else ''}
-
-            <div class="fertility-row">
-                <div class="dashboard-item">
-                    {monthly_fertility_table_html}
-                </div>
-                
-                <div class="dashboard-item">
-        {fertility_table_html}
-                </div>
-                
-                <div class="dashboard-item">
-                    {insemination_count_fertility_table_html}
-                </div>
-            </div>
-
-            <div class="cumulative-preg-row">
-                <div class="dashboard-item">
-                    {cumulative_preg_section_html}
-                </div>
-                <div class="dashboard-item">
-                    {ai_et_table_html}
-                </div>
-            </div>
-
-            <div class="scatter-row-repro">
-                <div class="dashboard-item">
-                    {first_ai_scatter_html}
-                </div>
-                <div class="dashboard-item">
-                    {rc_dim_scatter_html}
-                </div>
-            </div>
-
-            <div class="heifer-fertility-row">
-                <div class="dashboard-item">
-                    {heifer_monthly_table_html}
-                </div>
-            </div>
-        </div>
+<!-- ────────────────── 固定ナビゲーションバー ────────────────── -->
+<nav class="dash-nav" id="dash-nav">
+  <div class="nav-inner">
+    <span class="nav-farm">{html.escape(str(farm_name))}</span>
+    <div class="nav-buttons">
+      <button class="nav-btn active" data-sec="sec-overview"  onclick="jumpTo('sec-overview')">概要</button>
+      <button class="nav-btn"        data-sec="sec-milk"      onclick="jumpTo('sec-milk')">乳生産</button>
+      <button class="nav-btn"        data-sec="sec-repro"     onclick="jumpTo('sec-repro')">受胎率</button>
+      <button class="nav-btn"        data-sec="sec-pr"        onclick="jumpTo('sec-pr')">妊娠率</button>
+      <button class="nav-btn"        data-sec="sec-dynamics"  onclick="jumpTo('sec-dynamics')">牛群動態</button>
     </div>
+  </div>
+</nav>
+
+<div class="dashboard-container">
+  <div class="header">{html.escape(str(farm_name))}</div>
+  <div class="header-meta">ダッシュボード　／　更新: {date.today().strftime('%Y年%m月%d日')}</div>
+
+  <!-- ════════════════════════════════════════════════════
+       セクション① 概要
+       ════════════════════════════════════════════════════ -->
+  <section id="sec-overview" class="dash-section">
+    <div class="sec-label">概要</div>
+
+    <!-- KPI カード (6枚) ─ 最重要指標を左上に配置（ガイドブック p.23） -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">経産牛頭数</div>
+        <div class="kpi-value">{_kpi_total}</div>
+        <div class="kpi-sub">平均産次 {avg_parity:.1f}</div>
+      </div>
+      <div class="kpi-card kpi-purple">
+        <div class="kpi-label">21日妊娠率（PR）</div>
+        <div class="kpi-value">{_kpi_pr21}</div>
+        <div class="kpi-sub">直近18サイクル平均</div>
+      </div>
+      <div class="kpi-card kpi-teal">
+        <div class="kpi-label">平均受胎率</div>
+        <div class="kpi-value">{_kpi_conception}</div>
+        <div class="kpi-sub">直近1年（経産牛）</div>
+      </div>
+      <div class="kpi-card kpi-orange">
+        <div class="kpi-label">妊娠牛割合</div>
+        <div class="kpi-value">{_kpi_preg}</div>
+        <div class="kpi-sub">現在在籍経産牛</div>
+      </div>
+      <div class="kpi-card kpi-green">
+        <div class="kpi-label">平均乳量</div>
+        <div class="kpi-value">{_kpi_avg_milk}</div>
+        <div class="kpi-sub">直近乳検 {_milk_date}</div>
+      </div>
+      <div class="kpi-card kpi-red">
+        <div class="kpi-label">平均DIM</div>
+        <div class="kpi-value">{_kpi_avg_dim}</div>
+        <div class="kpi-sub">経産牛・分娩後日数平均</div>
+      </div>
+    </div>
+
+    <!-- 産次構成 + 牛群サマリー -->
+    <div class="two-col-grid">
+      <div class="dashboard-item">
+        <div class="parity-section">
+          <div class="section-title">産次構成</div>
+          <div class="parity-chart-container">
+            <div class="parity-donut">{parity_donut_svg}</div>
+            <div class="legend">{parity_legend}</div>
+          </div>
+          <div class="herd-summary-stats">
+            {f'<div class="summary-stat-item"><span class="summary-stat-label">平均分娩後日数:</span><span class="summary-stat-value">{herd_summary.get("avg_dim",0):.1f}日</span></div>' if herd_summary.get("avg_dim") is not None else '<div class="summary-stat-item"><span class="summary-stat-label">平均分娩後日数:</span><span class="summary-stat-value">-</span></div>'}
+            {f'<div class="summary-stat-item"><span class="summary-stat-label">分娩間隔（実績）:</span><span class="summary-stat-value">{herd_summary.get("avg_cci",0):.1f}日</span></div>' if herd_summary.get("avg_cci") is not None else '<div class="summary-stat-item"><span class="summary-stat-label">分娩間隔（実績）:</span><span class="summary-stat-value">-</span></div>'}
+            {f'<div class="summary-stat-item"><span class="summary-stat-label">予定分娩間隔:</span><span class="summary-stat-value">{herd_summary.get("avg_pcci",0):.1f}日</span></div>' if herd_summary.get("avg_pcci") is not None else '<div class="summary-stat-item"><span class="summary-stat-label">予定分娩間隔:</span><span class="summary-stat-value">-</span></div>'}
+          </div>
+        </div>
+      </div>
+      <div class="dashboard-item">
+        {scc_summary_html}
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════
+       セクション② 乳生産
+       ════════════════════════════════════════════════════ -->
+  <section id="sec-milk" class="dash-section">
+    <div class="sec-label">乳生産</div>
+
+    <!-- 乳量要約 + 乳量統計 -->
+    <div class="two-col-grid">
+      <div class="dashboard-item">
+        {milk_stats_html}
+      </div>
+      <div class="dashboard-item">
+        <div class="section-title">乳量統計（直近乳検日{" " + html.escape(_milk_date) if _milk_date else ""}）</div>
+        <div class="milk-stat-row"><span class="milk-stat-lbl">平均乳量</span><span class="milk-stat-val">{_kpi_avg_milk}</span></div>
+        <div class="milk-stat-row"><span class="milk-stat-lbl">最高乳量</span><span class="milk-stat-val">{_kpi_max_milk}</span></div>
+        <div class="milk-stat-row"><span class="milk-stat-lbl">最低乳量</span><span class="milk-stat-val">{_kpi_min_milk}</span></div>
+        <div class="milk-stat-row"><span class="milk-stat-lbl">中央値</span><span class="milk-stat-val">{_kpi_med_milk}</span></div>
+        {f'<div class="milk-stat-row"><span class="milk-stat-lbl">初産平均</span><span class="milk-stat-val">{milk_stats["avg_first_parity"]:.1f}kg</span></div>' if milk_stats.get("avg_first_parity") else ''}
+        {f'<div class="milk-stat-row"><span class="milk-stat-lbl">経産（2産〜）平均</span><span class="milk-stat-val">{milk_stats["avg_multiparous"]:.1f}kg</span></div>' if milk_stats.get("avg_multiparous") else ''}
+      </div>
+    </div>
+
+    <!-- 乳量・リニアスコア散布図 -->
+    {scatter_plotly_html}
+
+    <!-- 月次トレンドグラフ（12ヶ月） -->
+    {milk_trend_html}
+
+    <!-- BHB高値牛・乳量低下牛アラート -->
+    <div class="two-col-grid" style="margin-top:20px">
+      <div class="dashboard-item">{bhb_alert_html}</div>
+      <div class="dashboard-item">{drop_alert_html}</div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════
+       セクション③ 受胎率
+       ════════════════════════════════════════════════════ -->
+  <section id="sec-repro" class="dash-section">
+    <div class="sec-label">受胎率</div>
+
+    <!-- 月別 / 産次別 / 授精回数別 -->
+    <div class="three-col-grid">
+      <div class="dashboard-item">{monthly_fertility_table_html}</div>
+      <div class="dashboard-item">{fertility_table_html}</div>
+      <div class="dashboard-item">{insemination_count_fertility_table_html}</div>
+    </div>
+
+    <!-- AI/ET比較 + 未経産牛受胎率 -->
+    <div class="two-col-grid">
+      <div class="dashboard-item">{ai_et_table_html}</div>
+      <div class="dashboard-item">{heifer_monthly_table_html}</div>
+    </div>
+
+    <!-- 繁殖散布図 -->
+    <div class="two-col-grid">
+      <div class="dashboard-item">{first_ai_scatter_html}</div>
+      <div class="dashboard-item">{rc_dim_scatter_html}</div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════
+       セクション④ 妊娠率（21日PR）
+       ════════════════════════════════════════════════════ -->
+  <section id="sec-pr" class="dash-section">
+    <div class="sec-label">妊娠率（21日PR）</div>
+
+    {f'''<div class="pr-detail-row">
+      <div class="dashboard-item">{pr_cycle_table_html}</div>
+      <div class="dashboard-item pr-dim-card">
+        {pr_dim_chart_html}
+        {pregnancy_donut_html}
+      </div>
+    </div>
+    <div class="cumulative-preg-row" style="margin-top:20px">
+      <div class="dashboard-item">{cumulative_preg_section_html}</div>
+    </div>''' if repro_detail else '<p class="subnote" style="margin:8px 0">繁殖データがありません。</p>'}
+  </section>
+
+  <!-- ════════════════════════════════════════════════════
+       セクション⑤ 牛群動態
+       ════════════════════════════════════════════════════ -->
+  <section id="sec-dynamics" class="dash-section">
+    <div class="sec-label">牛群動態</div>
+    <div class="dashboard-item">
+      <div class="herd-dynamics-section">
+        {herd_dynamics_chart_html}
+      </div>
+    </div>
+  </section>
+
+</div><!-- /.dashboard-container -->
+
+<script>
+(function() {{
+  function jumpTo(id) {{
+    var el = document.getElementById(id);
+    if (el) el.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+  }}
+  window.jumpTo = jumpTo;
+
+  // IntersectionObserver でアクティブボタンを追跡
+  var secs = document.querySelectorAll('.dash-section');
+  var btns = document.querySelectorAll('.nav-btn');
+  if (typeof IntersectionObserver !== 'undefined') {{
+    var observer = new IntersectionObserver(function(entries) {{
+      entries.forEach(function(entry) {{
+        if (entry.isIntersecting) {{
+          btns.forEach(function(b) {{
+            b.classList.toggle('active', b.dataset.sec === entry.target.id);
+          }});
+        }}
+      }});
+    }}, {{rootMargin: '-10% 0px -60% 0px', threshold: 0}});
+    secs.forEach(function(s) {{ observer.observe(s); }});
+  }}
+}})();
+</script>
 </body>
 </html>"""
         return html_content

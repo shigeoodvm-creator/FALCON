@@ -162,12 +162,30 @@ class ReproductionCheckupLogic:
             return list(events)
         
         # 経産牛（LACT >= 1）：当該産次のイベントのみ
-        # 1) event_lact がある場合はそれでフィルタ（推奨・より正確）
+        # 分娩で前産次との境界が確定するため、最新分娩日を最優先の境界として扱う。
+        # event_lact が誤っていても、分娩前の検診結果が混ざらないようにする。
+        calving_dates = sorted(
+            [
+                e.get('event_date')
+                for e in events
+                if e.get('event_number') == RuleEngine.EVENT_CALV and e.get('event_date')
+            ]
+        )
+        boundary_date = calving_dates[-1] if calving_dates else None
+
+        # 1) 最新分娩日がある場合：分娩日以降のみ対象（分娩当日イベントは含む）
+        if boundary_date:
+            return [
+                e for e in events
+                if e.get('event_date') and e.get('event_date') >= boundary_date
+            ]
+
+        # 2) 分娩イベントが無い場合のみ event_lact でフィルタ（後方互換）
         has_event_lact = any(e.get('event_lact') is not None for e in events)
         if has_event_lact:
             return [e for e in events if e.get('event_lact') == lact]
-        
-        # 2) event_lact がない場合は clvd 以降の日付でフィルタ（後方互換）
+
+        # 3) どちらも無い場合は cow.clvd 以降（日付ベース）
         clvd = cow.get('clvd')
         if not clvd:
             return list(events)

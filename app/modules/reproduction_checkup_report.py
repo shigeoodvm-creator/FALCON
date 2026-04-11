@@ -157,12 +157,8 @@ def _get_herd_repro_metrics(
 
     # 初回授精日数・初回授精受胎率・授精回数・分娩間隔・予定分娩間隔（FormulaEngine使用）
     formula_engine = None
-    item_dict_path = Path(farm_path) / "config" / "item_dictionary.json"
-    if not item_dict_path.exists():
-        # プロジェクトルートの config_default を参照（app/modules から2つ上でFALCON）
-        item_dict_path = Path(__file__).resolve().parent.parent.parent / "config_default" / "item_dictionary.json"
-    if not item_dict_path.exists():
-        item_dict_path = Path(__file__).resolve().parent.parent / "config_default" / "item_dictionary.json"
+    from constants import CONFIG_DEFAULT_DIR
+    item_dict_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
     try:
         from modules.formula_engine import FormulaEngine
         formula_engine = FormulaEngine(db, item_dict_path)

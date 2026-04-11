@@ -46,6 +46,11 @@ desktop.ini
 # Office temporary files
 ~$*
 
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
 # Secrets / API keys
 config/openai.json
 

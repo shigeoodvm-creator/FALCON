@@ -291,6 +291,12 @@ class EventInputWindow:
             return False
         return set(self.allowed_event_numbers) == {RuleEngine.EVENT_SOLD, RuleEngine.EVENT_DEAD}
 
+    def _is_ai_et_only_mode(self) -> bool:
+        """繁殖検診フロー等で AI(200)/ET(201) のみ許可で開かれているか"""
+        if self.allowed_event_numbers is None or len(self.allowed_event_numbers) != 2:
+            return False
+        return set(self.allowed_event_numbers) == {RuleEngine.EVENT_AI, RuleEngine.EVENT_ET}
+
     def _get_window_title(self) -> str:
         """ウィンドウ・ヘッダー用タイトル（退出モード時は「退出」に統一）"""
         if self.event_id is not None:
@@ -681,6 +687,17 @@ class EventInputWindow:
                 fg="#283593",
             )
             event_info_label.pack(anchor=tk.W)
+        elif self._is_ai_et_only_mode():
+            event_info_frame = tk.Frame(content_area, bg="#e8eaf6", pady=12, padx=16)
+            event_info_frame.pack(fill=tk.X, pady=(0, 8))
+            event_info_label = tk.Label(
+                event_info_frame,
+                text="AI/ET",
+                font=(_df, 15, "bold"),
+                bg="#e8eaf6",
+                fg="#283593",
+            )
+            event_info_label.pack(anchor=tk.W)
         elif self.allowed_event_numbers is not None and len(self.allowed_event_numbers) == 1:
             event_number = self.allowed_event_numbers[0]
             event_num_str = str(event_number)
@@ -837,7 +854,16 @@ class EventInputWindow:
         self.event_number_entry.bind('<KeyRelease>', self._on_event_number_changed)
         self.event_number_entry.bind('<Return>', self._on_event_number_enter)
         self.event_number_entry.bind('<Tab>', self._on_event_number_tab)
-        ttk.Label(event_frame, text="数字で候補を絞り込み", style="EventInput.Hint.TLabel").grid(
+        _event_num_hint = (
+            f"AI：{RuleEngine.EVENT_AI}、ET：{RuleEngine.EVENT_ET}"
+            if self._is_ai_et_only_mode()
+            else "例: 1xx=体況/生産, 2xx=繁殖・分娩・管理, 3xx=繁殖検査/妊娠,\n4xx=疾病, 6xx=導入/群管理/タスク"
+        )
+        ttk.Label(
+            event_frame,
+            text=_event_num_hint,
+            style="EventInput.Hint.TLabel"
+        ).grid(
             row=1, column=1, sticky=tk.W, padx=(0, 5), pady=(0, 4)
         )
         
@@ -1507,6 +1533,27 @@ class EventInputWindow:
                 self.field_widgets[f"{key}_checkbox"] = checkbox
                 row_index += 1
                 continue
+
+            # choices 付き文字列（例: BLV結果＝未検査/陰性/陽性）
+            choices = field.get("choices")
+            if choices and datatype == "str" and isinstance(choices, list) and len(choices) > 0:
+                ttk.Label(
+                    self.form_frame,
+                    text=f"{label_text}:",
+                ).grid(row=row_index, column=0, sticky=tk.W, padx=(5, 8), pady=(6, 2))
+                combo = ttk.Combobox(
+                    self.form_frame,
+                    values=list(choices),
+                    width=self._entry_width,
+                    state="readonly",
+                    style="EventInput.TCombobox",
+                )
+                combo.set(choices[0])
+                combo.grid(row=row_index, column=1, sticky=tk.W, padx=(0, 5), pady=(6, 2))
+                self.field_widgets[key] = combo
+                entry_widgets.append(combo)
+                row_index += 1
+                continue
             
             # ラベル
             ttk.Label(
@@ -1788,6 +1835,16 @@ class EventInputWindow:
             if key == 'jpn10' and value:
                 if not value.isdigit() or len(value) != 10:
                     messagebox.showerror("エラー", "個体識別番号は10桁の数字で入力してください")
+                    widget.focus()
+                    return False
+            
+            # 登録日（YYYY-MM-DD）
+            if key == 'registration_date' and value:
+                if not normalize_date(value):
+                    messagebox.showerror(
+                        "エラー",
+                        "登録日（繁殖指標の起点）は YYYY-MM-DD 形式で入力してください。",
+                    )
                     widget.focus()
                     return False
             
@@ -2695,6 +2752,26 @@ class EventInputWindow:
         
         # ========== 2. json_data から入力フィールドを設定 ==========
         json_data = event.get('json_data') or {}
+        if not isinstance(json_data, dict):
+            json_data = {}
+        if event_number == RuleEngine.EVENT_BLV:
+            if not str(json_data.get("blv_result") or "").strip():
+                bp = json_data.get("blv_positive")
+                if bp is True:
+                    json_data = {**json_data, "blv_result": "陽性"}
+                elif bp is False:
+                    json_data = {**json_data, "blv_result": "陰性"}
+                else:
+                    json_data = {**json_data, "blv_result": "未検査"}
+        if event_number == RuleEngine.EVENT_IN and self.cow_auto_id:
+            if not str(json_data.get('tag') or '').strip():
+                tag_iv = self.db.get_item_value(self.cow_auto_id, 'TAG')
+                if tag_iv:
+                    json_data = {**json_data, 'tag': tag_iv}
+            if not str(json_data.get('registration_date') or '').strip():
+                cow_row = self.db.get_cow_by_auto_id(self.cow_auto_id)
+                if cow_row and cow_row.get('entr'):
+                    json_data = {**json_data, 'registration_date': cow_row.get('entr')}
         # 編集時の元データを保持（baseline_calving等を引き継ぐため）
         self._editing_event_json = json_data.copy()
         
@@ -3264,6 +3341,10 @@ class EventInputWindow:
                 
                 # Combobox の場合、「コード：名称」形式からコード部分のみを抽出
                 if isinstance(widget, ttk.Combobox):
+                    field_choices = field.get("choices")
+                    if field_choices and isinstance(field_choices, list) and len(field_choices) > 0:
+                        json_data[key] = value
+                        continue
                     if key == 'treatment' and "：" in value:
                         # 処置は「1：WPG」形式から「WPG」のみを抽出
                         parts = value.split("：", 1)
@@ -3328,6 +3409,20 @@ class EventInputWindow:
                     else:
                         # 空の場合は None を設定（削除の意味）
                         json_data['insemination_type_code'] = None
+        
+        # 導入イベント: TAG を item_value 用にウィジェットから取得（正規化で空欄が落ちる前に）
+        intro_tag_for_item = ""
+        if self.selected_event_number == RuleEngine.EVENT_IN:
+            tw = self.field_widgets.get('tag')
+            intro_tag_for_item = tw.get().strip() if tw else ""
+        
+        # 導入イベント: 登録日（繁殖指標の起点）。未入力時はイベント日付と同じ
+        entr_for_metrics: Optional[str] = None
+        if self.selected_event_number == 600:
+            entr_for_metrics = normalized_date
+            reg_raw = (json_data.get('registration_date') or '').strip()
+            if reg_raw:
+                entr_for_metrics = normalize_date(reg_raw) or normalized_date
         
         # 3. json_data を正規化（必ず dict にする、空の場合は {}）
         # None や空文字列の値は削除
@@ -3428,7 +3523,7 @@ class EventInputWindow:
                             'jpn10': jpn10,
                             'brd': breed if breed else None,
                             'bthd': birth_date if birth_date else None,
-                            'entr': normalized_date,  # 導入日をentrに設定
+                            'entr': entr_for_metrics or normalized_date,
                             'lact': int(lactation) if lactation is not None else None,
                             'clvd': None,
                             'rc': int(reproduction_code) if reproduction_code is not None else None,
@@ -3519,6 +3614,15 @@ class EventInputWindow:
                     self._handle_calving_followups(event_id, normalized_date, json_data)
                 
                 # 妊娠プラス/マイナスイベント保存時は、rule_engine.update_insemination_outcomes()で自動的にoutcomeが更新される
+            
+            # 導入イベント: タグを item_value（TAG）に同期、登録日（entr）を同期
+            if saved_event_number == RuleEngine.EVENT_IN and self.cow_auto_id is not None:
+                self.db.set_item_value(self.cow_auto_id, "TAG", intro_tag_for_item)
+                if entr_for_metrics:
+                    try:
+                        self.db.update_cow(self.cow_auto_id, {'entr': entr_for_metrics})
+                    except Exception as e:
+                        logging.warning(f"導入イベント: entr 更新に失敗: {e}")
             
             try:
                 from modules.activity_log import record_from_event

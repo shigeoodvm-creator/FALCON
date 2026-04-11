@@ -89,10 +89,9 @@ class AnalysisUI:
     
     def _load_dictionaries(self):
         """辞書を読み込む（本体 config_default を参照）"""
-        app_root = Path(__file__).parent.parent.parent
-        config_default = app_root / "config_default"
+        from constants import CONFIG_DEFAULT_DIR
         # item_dictionary.json
-        item_dict_path = config_default / "item_dictionary.json"
+        item_dict_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
         if item_dict_path.exists():
             try:
                 with open(item_dict_path, 'r', encoding='utf-8') as f:
@@ -100,7 +99,7 @@ class AnalysisUI:
             except Exception as e:
                 logger.error(f"item_dictionary.json読み込みエラー: {e}")
         # event_dictionary.json
-        event_dict_path = config_default / "event_dictionary.json"
+        event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         if event_dict_path.exists():
             try:
                 with open(event_dict_path, 'r', encoding='utf-8') as f:

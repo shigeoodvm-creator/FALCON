@@ -8,5 +8,9 @@ numpy>=1.24.0
 # データ処理（分析レポート等）
 pandas>=2.0.0
 
-# OpenAI API クライアント
-openai>=1.0.0
+# Excel読み書き（個体一括導入テンプレート）
+openpyxl>=3.1.0
+
+# Windowsでグラフ画像をクリップボードへコピーするために使用
+Pillow>=10.0.0
+pywin32>=306

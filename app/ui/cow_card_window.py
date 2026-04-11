@@ -55,9 +55,14 @@ class CowCardWindow:
         self.window = tk.Toplevel(parent)
         self.window.title("個体カード")
         self.window.configure(bg=bg)
+        screen_width = parent.winfo_screenwidth()
         screen_height = parent.winfo_screenheight()
-        # 左：個体カード + 右：履歴を1ウィンドウに収める幅
-        self.window.geometry(f"1520x{screen_height}")
+        # 初期サイズは画面より少し小さくして、最大化ボタンを有効な状態にする
+        init_w = min(1520, max(1100, screen_width - 120))
+        init_h = min(900, max(700, screen_height - 120))
+        self.window.geometry(f"{init_w}x{init_h}")
+        self.window.minsize(1100, 700)
+        self.window.resizable(True, True)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         
         # ========== 左右分割（PanedWindow）==========
@@ -116,13 +121,16 @@ class CowCardWindow:
         self.current_cow_auto_id = None
         
         # CowCardを作成（左ペイン用）
+        # イベント履歴は右ペインの CowHistoryWindow のみ（CowCard 内に二重表示しない）
         self.cow_card = CowCard(
             parent=left_frame,
             db_handler=db_handler,
             formula_engine=formula_engine,
             rule_engine=rule_engine,
             event_dictionary_path=event_dictionary_path,
-            item_dictionary_path=item_dictionary_path
+            item_dictionary_path=item_dictionary_path,
+            show_event_history=False,
+            on_remote_event_history_refresh=self._notify_embedded_history_refresh,
         )
         cow_card_widget = self.cow_card.get_widget()
         cow_card_widget.pack(fill=tk.BOTH, expand=True, padx=24, pady=(0, 10))
@@ -139,6 +147,12 @@ class CowCardWindow:
         # 牛の情報を読み込んで表示（cow_auto_idが指定されている場合）
         if cow_auto_id:
             self.load_cow(cow_auto_id)
+
+    def _notify_embedded_history_refresh(self, cow_auto_id: int) -> None:
+        """CowCard 側の履歴表示が無いとき、右ペインの CowHistoryWindow を同期する"""
+        hw = getattr(self, "history_window", None)
+        if hw and hw.window.winfo_exists():
+            hw.load_cow(cow_auto_id)
     
     def load_cow(self, cow_auto_id: int):
         """
@@ -190,12 +204,8 @@ class CowCardWindow:
                 self.cow_id_entry.config(bg="white", fg="#263238")
                 self.disposed_badge.pack_forget()
             
-            # CowCardに牛の情報を読み込む
+            # CowCardに牛の情報を読み込む（内部で _notify_embedded_history_refresh により右ペインも更新）
             self.cow_card.load_cow(cow_auto_id)
-            
-            # 履歴ウィンドウが開いていれば同期して更新（埋め込み時は右ペイン）
-            if self.history_window and self.history_window.window.winfo_exists():
-                self.history_window.load_cow(cow_auto_id)
             
         except Exception as e:
             import traceback
@@ -430,7 +440,42 @@ class CowCardWindow:
     def show(self):
         """ウィンドウを表示"""
         self.window.deiconify()
+
+        # ダッシュボード裏（HTML内）から起動されるケースでは、
+        # 単なる focus_set() だけだとフォーカスが奪われず裏に回ることがある。
+        # いったん topmost にして前面表示し、その後解除する。
+        try:
+            self.window.attributes('-topmost', True)
+        except tk.TclError:
+            pass
+
         self.window.lift()
-        self.window.focus_set()
+
+        # focus_force がある環境では強制フォーカスを試す
+        try:
+            self.window.focus_force()
+        except Exception:
+            self.window.focus_set()
+
+        def _unset_topmost():
+            try:
+                self.window.attributes('-topmost', False)
+            except tk.TclError:
+                pass
+            # topmost解除直後に背面化するケースがあるため、もう一度前面化を試みる
+            try:
+                self.window.lift()
+                self.window.focus_force()
+            except Exception:
+                try:
+                    self.window.focus_set()
+                except Exception:
+                    pass
+
+        try:
+            # 描画・別ウィンドウ更新が落ち着くまで少し長めに保持
+            self.window.after(1200, _unset_topmost)
+        except Exception:
+            _unset_topmost()
 
 

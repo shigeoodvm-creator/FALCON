@@ -1,7 +1,11 @@
 import tkinter as tk
 from tkinter import messagebox
 import logging
+import logging.handlers
 import json
+import os
+import sys
+import traceback
 from pathlib import Path
 from typing import Optional
 from ui.farm_selector import FarmSelectorWindow
@@ -10,19 +14,53 @@ from db.db_handler import DBHandler
 from modules.formula_engine import FormulaEngine
 from modules.rule_engine import RuleEngine
 from settings_manager import SettingsManager
-from constants import FARMS_ROOT
+from constants import FARMS_ROOT, CONFIG_DEFAULT_DIR
 
-# ログ設定（起動時はWARNINGレベル、必要に応じてINFOに変更）
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('falcon.log', encoding='utf-8')
-    ]
+# ========== ログ設定 ==========
+# EXE化後もサポートに送れるよう %APPDATA%/FALCON2/falcon2.log へ出力
+_LOG_DIR  = Path(os.environ.get("APPDATA", Path.home())) / "FALCON2"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_FILE = _LOG_DIR / "falcon2.log"
+
+_log_formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
 )
+_file_handler = logging.handlers.RotatingFileHandler(
+    _LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_file_handler.setFormatter(_log_formatter)
+_file_handler.setLevel(logging.WARNING)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_log_formatter)
+_console_handler.setLevel(logging.WARNING)
+
+logging.basicConfig(level=logging.WARNING, handlers=[_file_handler, _console_handler])
 
 logger = logging.getLogger(__name__)
+
+
+def _setup_excepthook():
+    """未捕捉例外をログに記録し、ユーザーにログパスを案内するダイアログを出す"""
+    def _handler(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        logger.critical(f"未捕捉例外:\n{msg}")
+        try:
+            messagebox.showerror(
+                "予期せぬエラー",
+                f"アプリが予期せぬエラーで停止しました。\n\n"
+                f"サポートへ以下のログファイルをお送りください:\n{_LOG_FILE}\n\n"
+                f"エラー: {exc_value}"
+            )
+        except Exception:
+            pass
+    sys.excepthook = _handler
+
+_setup_excepthook()
 
 
 def main(cow_id: Optional[str] = None):
@@ -34,9 +72,6 @@ def main(cow_id: Optional[str] = None):
     """
     logger = logging.getLogger(__name__)
     
-    # FALCONフォルダのルートパスを取得
-    falcon_root = Path(__file__).parent.parent
-    
     # ========== 起動時の重い処理を非同期化（バックグラウンドで実行） ==========
     # 辞書同期とnormalization辞書生成は、起動後にバックグラウンドで実行
     # これにより起動時間を大幅に短縮
@@ -44,7 +79,7 @@ def main(cow_id: Optional[str] = None):
         """バックグラウンドで農場側の項目・イベント辞書を削除し、normalization辞書を生成"""
         try:
             from modules.dictionary_sync import DictionarySync
-            sync = DictionarySync(falcon_root)
+            sync = DictionarySync()
             sync.delete_farm_dictionary_files(FARMS_ROOT)
             logger.info("バックグラウンド：農場側の項目・イベント辞書の削除を完了しました")
         except Exception as e:
@@ -66,10 +101,65 @@ def main(cow_id: Optional[str] = None):
     root = tk.Tk()
     root.title("FALCON2")
     root.geometry("600x400")
+
+    # アプリアイコン設定
+    try:
+        from pathlib import Path as _Path
+        _ico = _Path(__file__).parent / "resources" / "falcon2.ico"
+        if _ico.exists():
+            root.iconbitmap(str(_ico))
+    except Exception:
+        pass
     # 全ウィンドウ共通：日付入力欄で全角数字/記号を半角に統一
     install_date_input_normalizer(root)
     # 起動時はルートを非表示にし、農場選択ウィンドウだけを前面に表示
     root.withdraw()
+
+    # スプラッシュスクリーン表示
+    try:
+        from ui.splash_screen import SplashScreen
+        from constants import APP_VERSION
+        _splash = SplashScreen(root, version=APP_VERSION)
+        root.update()
+    except Exception as _e:
+        logger.warning(f"スプラッシュ表示失敗: {_e}")
+        _splash = None
+
+    # ========== ライセンスチェック ==========
+    from modules.license_manager import get_license_manager, LicenseStatus
+    from ui.license_window import LicenseActivationWindow
+
+    _license_info = get_license_manager().check()
+
+    if _license_info.status == LicenseStatus.TRIAL_EXPIRED:
+        # 試用期限切れ → アクティベーション必須（閉じると終了）
+        LicenseActivationWindow(root, allow_close=False, info=_license_info).show()
+        _license_info = get_license_manager().check()
+        if not _license_info.is_usable:
+            root.quit()
+            return
+    elif _license_info.status == LicenseStatus.LICENSE_EXPIRED:
+        # ライセンス期限切れ → 更新を促す
+        LicenseActivationWindow(root, allow_close=False, info=_license_info).show()
+        _license_info = get_license_manager().check()
+        if not _license_info.is_usable:
+            root.quit()
+            return
+    elif _license_info.status == LicenseStatus.LICENSE_INVALID:
+        messagebox.showerror(
+            "ライセスエラー",
+            "ライセンスファイルが不正です。\n"
+            "ライセンスキーを再入力するか、サポートにご連絡ください。"
+        )
+        LicenseActivationWindow(root, allow_close=False, info=_license_info).show()
+        _license_info = get_license_manager().check()
+        if not _license_info.is_usable:
+            root.quit()
+            return
+
+    # ライセンス情報をグローバルに保持（農場数チェック等で参照）
+    import builtins
+    builtins._falcon_license = _license_info
 
     # レポート散布図クリック→個体カードを開く用のローカルサーバを起動
     try:
@@ -111,11 +201,10 @@ def main(cow_id: Optional[str] = None):
                     logger.info(f"農場側の辞書を削除しました（本体参照のため）: {farm_dict_file}")
                 except Exception as e:
                     logger.warning(f"農場側辞書の削除をスキップ: {farm_dict_file} - {e}")
-        config_default = falcon_root / "config_default"
-        item_dict_path = config_default / "item_dictionary.json"
+        item_dict_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
         if not item_dict_path.exists():
             item_dict_path = None
-        event_dict_path = config_default / "event_dictionary.json"
+        event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         if not event_dict_path.exists():
             event_dict_path = None
         
@@ -196,9 +285,52 @@ def main(cow_id: Optional[str] = None):
 
         root.after(1500, _run_monthly_checks)
 
+        # ── バックアップリマインダー ────────────────────────────
+        def _check_backup_reminder():
+            try:
+                from backup_manager import load_backup_settings, should_run_backup, run_backup
+                settings = load_backup_settings(farm_path)
+                dest = (settings.get("destination_path") or "").strip()
+
+                if not dest:
+                    # 保存先未設定
+                    if messagebox.askyesno(
+                        "バックアップ設定のお勧め",
+                        "バックアップ先フォルダが設定されていません。\n"
+                        "万一のデータ消失に備えて、バックアップ設定を行ってください。\n\n"
+                        "今すぐ設定しますか？"
+                    ):
+                        from ui.backup_settings_window import BackupSettingsWindow
+                        BackupSettingsWindow(root, farm_path).window.wait_window()
+                elif should_run_backup(farm_path):
+                    # バックアップ期限が来ている
+                    interval = settings.get("interval_months", 1)
+                    last_ym  = settings.get("last_backup_ym") or "未実施"
+                    ans = messagebox.askyesno(
+                        "バックアップのお知らせ",
+                        f"バックアップの実施タイミングです（設定: {interval}か月ごと）。\n"
+                        f"前回: {last_ym}\n\n"
+                        f"今すぐバックアップを実行しますか？"
+                    )
+                    if ans:
+                        result = run_backup(farm_path)
+                        if result:
+                            messagebox.showinfo("完了", f"バックアップが完了しました。\n保存先: {result}")
+                        else:
+                            messagebox.showwarning("失敗", "バックアップに失敗しました。\n保存先フォルダを確認してください。")
+            except Exception as _e:
+                logger.warning(f"バックアップリマインダーでエラー: {_e}")
+
+        root.after(3000, _check_backup_reminder)
+
         # 個体IDが指定されている場合は、個体カードウィンドウを開く
         if cow_id:
             _open_cow_card_window(root, db_handler, formula_engine, rule_engine, farm_path, cow_id)
+
+    # スプラッシュを閉じてから農場選択を表示
+    if _splash:
+        _splash.set_status("農場を選択してください")
+        root.after(400, _splash.close)
 
     # 最初の画面として FarmSelector を表示
     FarmSelectorWindow(root, on_farm_selected=on_farm_selected)
@@ -224,12 +356,10 @@ def _open_cow_card_window(root: tk.Tk, db_handler: DBHandler,
         from ui.cow_card_window import CowCardWindow
         
         # 項目辞書・イベント辞書は本体（config_default）を参照
-        falcon_root = Path(__file__).parent.parent
-        config_default = falcon_root / "config_default"
-        event_dict_path = config_default / "event_dictionary.json"
+        event_dict_path = CONFIG_DEFAULT_DIR / "event_dictionary.json"
         if not event_dict_path.exists():
             event_dict_path = None
-        item_dict_path = config_default / "item_dictionary.json"
+        item_dict_path = CONFIG_DEFAULT_DIR / "item_dictionary.json"
         if not item_dict_path.exists():
             item_dict_path = None
         

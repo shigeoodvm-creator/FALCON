@@ -193,6 +193,15 @@ class AnalysisSQLTemplates:
               AND e.event_date >= :start
               AND e.event_date <= :end
               AND e.deleted = 0
+              AND EXISTS (
+                SELECT 1 FROM cow c
+                WHERE c.auto_id = e.cow_auto_id
+                  AND (
+                    c.entr IS NULL
+                    OR TRIM(COALESCE(c.entr, '')) = ''
+                    OR e.event_date >= c.entr
+                  )
+              )
             GROUP BY m.ym
             ORDER BY m.ym
         """,

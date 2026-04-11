@@ -1,12 +1,12 @@
 """
 FALCON2 - 項目辞書一覧ウィンドウ
-item_dictionary.json を読み書きする
+item_dictionary.json を参照表示する（編集・削除は行わない）
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional
 
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -51,8 +51,6 @@ class ItemDictionaryWindow:
         self,
         parent: tk.Tk,
         item_dictionary_path: Optional[Path] = None,
-        on_item_updated: Optional[Callable[[], None]] = None,
-        formula_engine: Optional[Any] = None,
     ):
         """
         初期化
@@ -60,13 +58,9 @@ class ItemDictionaryWindow:
         Args:
             parent: 親ウィンドウ
             item_dictionary_path: item_dictionary.json のパス
-            on_item_updated: 保存後に呼び出されるコールバック（FormulaEngine再読込等）
-            formula_engine: FormulaEngine インスタンス（任意）
         """
         self.parent = parent
         self.item_dict_path = item_dictionary_path
-        self.on_item_updated = on_item_updated
-        self.formula_engine = formula_engine
 
         self.item_dictionary: Dict[str, Any] = {}
         self.selected_item_key: Optional[str] = None
@@ -160,7 +154,13 @@ class ItemDictionaryWindow:
         title_frame = tk.Frame(header, bg=bg)
         title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Label(title_frame, text="項目辞書一覧", font=(_df, 16, "bold"), bg=bg, fg="#263238").pack(anchor=tk.W)
-        tk.Label(title_frame, text="item_dictionary.json の内容を表示します", font=(_df, 10), bg=bg, fg="#607d8b").pack(anchor=tk.W)
+        tk.Label(
+            title_frame,
+            text="item_dictionary.json の定義を一覧します（参照のみ・ファイルは変更しません）",
+            font=(_df, 10),
+            bg=bg,
+            fg="#607d8b",
+        ).pack(anchor=tk.W)
 
         # 検索欄
         search_frame = ttk.Frame(self.main_container)
@@ -211,23 +211,14 @@ class ItemDictionaryWindow:
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
         self.context_menu = tk.Menu(self.window, tearoff=0)
-        self.context_menu.add_command(label="項目を編集", command=self._on_edit_selected)
         self.context_menu.add_command(label="計算式を確認", command=self._on_formula_selected)
-        self.context_menu.add_command(label="項目を削除", command=self._on_delete_selected)
         self.tree.bind("<Button-3>", self._on_right_click)
-        self.tree.bind("<Double-Button-1>", lambda e: self._on_edit_selected())
+        self.tree.bind("<Double-Button-1>", lambda e: self._on_formula_selected())
 
         button_frame = ttk.Frame(self.main_container)
         button_frame.grid(row=4, column=0, pady=(0, 10))
         ttk.Button(button_frame, text="閉じる", command=self.window.destroy, width=12).pack(side=tk.LEFT, padx=5)
 
-        debug_frame = ttk.LabelFrame(self.main_container, text="デバッグ情報", padding=5)
-        debug_frame.grid(row=5, column=0, sticky=tk.EW, pady=(0, 5))
-        debug_frame.grid_columnconfigure(0, weight=1)
-        dict_path_str = str(self.item_dict_path) if self.item_dict_path else "(未指定)"
-        ttk.Label(debug_frame, text=f"読み込み元: {dict_path_str}", font=("", 8), foreground="gray").pack(anchor=tk.W, padx=5, pady=2)
-        self._debug_count_label = ttk.Label(debug_frame, text=f"項目数: {len(self.item_dictionary)}", font=("", 8), foreground="gray")
-        self._debug_count_label.pack(anchor=tk.W, padx=5, pady=2)
     
     def _on_column_click(self, column: str):
         """列ヘッダーがクリックされたときの処理（3段階ソート：昇順→降順→元の順序）"""
@@ -277,9 +268,6 @@ class ItemDictionaryWindow:
                 text = base_text
             
             self.tree.heading(col, text=text, command=lambda c=col: self._on_column_click(c))
-
-        if hasattr(self, "_debug_count_label") and self._debug_count_label.winfo_exists():
-            self._debug_count_label.config(text=f"項目数: {len(self.item_dictionary)}")
 
     def _populate_tree(self):
         """ツリービューにデータを挿入（検索フィルタリングとソートを適用）"""
@@ -405,97 +393,19 @@ class ItemDictionaryWindow:
         finally:
             self.context_menu.grab_release()
 
-    def _on_edit_selected(self):
-        key, data = self._get_selected_item()
-        if not key or not data:
-            messagebox.showwarning("警告", "項目を選択してください")
-            return
-        if not self.item_dict_path:
-            messagebox.showerror("エラー", "item_dictionary.json のパスが設定されていません")
-            return
-        from ui.item_editor_window import ItemEditorWindow
-
-        def on_saved():
-            self._reload_dictionary()
-            # normalization辞書を再生成
-            self._regenerate_normalization_dict()
-        ItemEditorWindow(
-            parent=self.window,
-            item_key=key,
-            item_data=data,
-            item_dictionary_path=self.item_dict_path,
-            on_saved=on_saved,
-        ).show()
-
     def _on_formula_selected(self):
         key, data = self._get_selected_item()
         if not key or not data:
             messagebox.showwarning("警告", "項目を選択してください")
             return
-        if not self.item_dict_path:
-            messagebox.showerror("エラー", "item_dictionary.json のパスが設定されていません")
-            return
         from ui.item_formula_window import ItemFormulaWindow
 
-        def on_saved():
-            self._reload_dictionary()
-            # normalization辞書を再生成
-            self._regenerate_normalization_dict()
         ItemFormulaWindow(
             parent=self.window,
             item_key=key,
             item_data=data,
             item_dictionary_path=self.item_dict_path,
-            on_saved=on_saved,
-        ).show()
-
-    def _on_delete_selected(self):
-        key, data = self._get_selected_item()
-        if not key or not data:
-            messagebox.showwarning("警告", "項目を選択してください")
-            return
-        origin = _get_origin(data)
-        if origin in ("core", "calc", "event"):
-            messagebox.showwarning("警告", "core/event/calc 項目は削除できません")
-            return
-        result = messagebox.askyesno(
-            "確認", f"項目「{_get_label(data, key)} ({key})」を削除しますか？"
-        )
-        if not result:
-            return
-        try:
-            with open(self.item_dict_path, "r", encoding="utf-8") as f:
-                item_dict = json.load(f)
-            if key in item_dict:
-                del item_dict[key]
-                # フォルダが存在しない場合は作成
-                if self.item_dict_path:
-                    self.item_dict_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(self.item_dict_path, "w", encoding="utf-8") as f:
-                    json.dump(item_dict, f, ensure_ascii=False, indent=2)
-                messagebox.showinfo("完了", "項目を削除しました")
-                self._reload_dictionary()
-                # normalization辞書を再生成
-                self._regenerate_normalization_dict()
-            else:
-                messagebox.showerror("エラー", f"{key} が見つかりません")
-        except Exception as e:
-            messagebox.showerror("エラー", f"削除に失敗しました: {e}")
-
-    def _on_add_new(self):
-        if not self.item_dict_path:
-            messagebox.showerror("エラー", "item_dictionary.json のパスが設定されていません")
-            return
-        from ui.item_new_window import ItemNewWindow
-
-        def on_saved():
-            self._reload_dictionary()
-            # normalization辞書を再生成
-            self._regenerate_normalization_dict()
-        ItemNewWindow(
-            parent=self.window,
-            item_dictionary_path=self.item_dict_path,
-            on_saved=on_saved,
+            read_only=True,
         ).show()
 
     def _get_selected_item(self):
@@ -538,43 +448,6 @@ class ItemDictionaryWindow:
     def _clear_search(self):
         """検索欄をクリア"""
         self.search_var.set("")
-
-    def _regenerate_normalization_dict(self):
-        """normalization辞書を再生成"""
-        try:
-            from modules.normalization_generator import generate_normalization_dict
-            generate_normalization_dict()
-            logger.info("[ItemDictionaryWindow] normalization辞書を再生成しました")
-        except Exception as e:
-            logger.error(f"[ItemDictionaryWindow] normalization辞書の再生成に失敗: {e}")
-    
-    def _reload_dictionary(self):
-        """辞書を再読込して表示更新"""
-        prev_selected = self.selected_item_key
-        self._load_item_dictionary()
-        self._populate_tree()
-        # 再選択
-        if prev_selected:
-            for iid in self.tree.get_children():
-                item = self.tree.item(iid)
-                values = item.get("values", [])
-                if values and str(values[0]) == prev_selected:
-                    self.tree.selection_set(iid)
-                    self.tree.focus(iid)
-                    break
-        if self.on_item_updated:
-            try:
-                self.on_item_updated()
-            except Exception as e:
-                logger.error(f"on_item_updated callback error: {e}")
-        # FormulaEngine 内部の辞書キャッシュもリロード
-        if self.formula_engine:
-            reload_method = getattr(self.formula_engine, "reload_item_dictionary", None)
-            if callable(reload_method):
-                try:
-                    reload_method()
-                except Exception as e:
-                    logger.error(f"FormulaEngine reload failed: {e}")
 
     def show(self):
         """ウィンドウを表示"""
